@@ -1,0 +1,53 @@
+diff --git a/src/jdk.compiler/share/classes/com/sun/tools/javac/comp/Lower.java b/src/jdk.compiler/share/classes/com/sun/tools/javac/comp/Lower.java
+index dd9f5507718..8e7d82d2b70 100644
+--- a/src/jdk.compiler/share/classes/com/sun/tools/javac/comp/Lower.java
++++ b/src/jdk.compiler/share/classes/com/sun/tools/javac/comp/Lower.java
+@@ -3007,7 +3007,8 @@ public void visitApply(JCMethodInvocation tree) {
+             // is qualified, pass qualifier as first argument in front of
+             // the explicit constructor arguments. If the call
+             // is not qualified, pass the correct outer instance as
+-            // first argument.
++            // first argument. If we are a static class, there is no
++            // such outer instance, so generate an error.
+             if (c.hasOuterInstance()) {
+                 JCExpression thisArg;
+                 if (tree.meth.hasTag(SELECT)) {
+@@ -3018,6 +3019,11 @@ public void visitApply(JCMethodInvocation tree) {
+                 } else if (c.isDirectlyOrIndirectlyLocal() || methName == names._this){
+                     // local class or this() call
+                     thisArg = makeThis(tree.meth.pos(), c.type.getEnclosingType().tsym);
++                } else if (currentClass.isStatic()) {
++                    // super() call from static nested class - invalid
++                    log.error(tree.pos(),
++                        Errors.NoEnclInstanceOfTypeInScope(c.type.getEnclosingType().tsym));
++                    thisArg = make.Literal(BOT, null).setType(syms.botType);
+                 } else {
+                     // super() call of nested class - never pick 'this'
+                     thisArg = makeOwnerThisN(tree.meth.pos(), c, false);
+diff --git a/test/langtools/tools/javac/nested/StaticNestedNonStaticSuper.java b/test/langtools/tools/javac/nested/StaticNestedNonStaticSuper.java
+new file mode 100644
+index 00000000000..5230efac24a
+--- /dev/null
++++ b/test/langtools/tools/javac/nested/StaticNestedNonStaticSuper.java
+@@ -0,0 +1,13 @@
++/*
++ * @test /nodynamiccopyright/
++ * @bug 8291154
++ * @summary Disallow static nested subclasses of non-static nested classes
++ * @compile/fail/ref=StaticNestedNonStaticSuper.out -XDrawDiagnostics StaticNestedNonStaticSuper.java
++ */
++
++class StaticNestedNonStaticSuper{
++    public abstract class NonStaticNested {
++        public static class StaticNested extends NonStaticNested {
++        }
++    }
++}
+diff --git a/test/langtools/tools/javac/nested/StaticNestedNonStaticSuper.out b/test/langtools/tools/javac/nested/StaticNestedNonStaticSuper.out
+new file mode 100644
+index 00000000000..bb251bd3154
+--- /dev/null
++++ b/test/langtools/tools/javac/nested/StaticNestedNonStaticSuper.out
+@@ -0,0 +1,2 @@
++StaticNestedNonStaticSuper.java:10:23: compiler.err.no.encl.instance.of.type.in.scope: StaticNestedNonStaticSuper
++1 error

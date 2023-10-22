@@ -1,0 +1,13 @@
+diff --git a/src/hotspot/share/gc/shared/gcTimer.cpp b/src/hotspot/share/gc/shared/gcTimer.cpp
+index ca835e30ed3..d7669604d82 100644
+--- a/src/hotspot/share/gc/shared/gcTimer.cpp
++++ b/src/hotspot/share/gc/shared/gcTimer.cpp
+@@ -130,7 +130,7 @@ void TimePartitions::clear() {
+ }
+ 
+ void TimePartitions::report_gc_phase_start(const char* name, const Ticks& time, GCPhase::PhaseType type) {
+-  assert(_phases->length() <= 1000, "Too many recored phases?");
++  assert(_phases->length() <= 1000, "Too many recorded phases? (count: %d)", _phases->length());
+ 
+   int level = _active_phases.count();
+ 
