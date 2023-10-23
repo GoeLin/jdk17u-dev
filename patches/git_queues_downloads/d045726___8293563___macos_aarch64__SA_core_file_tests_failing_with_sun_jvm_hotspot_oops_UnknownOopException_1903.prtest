@@ -1,0 +1,138 @@
+diff --git a/test/hotspot/jtreg/ProblemList.txt b/test/hotspot/jtreg/ProblemList.txt
+index 9779973d4fc..fda77c82c0a 100644
+--- a/test/hotspot/jtreg/ProblemList.txt
++++ b/test/hotspot/jtreg/ProblemList.txt
+@@ -116,13 +116,13 @@ serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorStatArrayCorrectnessTest.j
+ serviceability/jvmti/ModuleAwareAgents/ThreadStart/MAAThreadStart.java 8225354 windows-all
+ serviceability/dcmd/gc/RunFinalizationTest.java 8227120 linux-all,windows-x64
+ 
+-serviceability/sa/ClhsdbCDSCore.java  8294316,8269982,8267433 macosx-aarch64,macosx-x64
+-serviceability/sa/ClhsdbFindPC.java#id1  8294316,8269982,8267433 macosx-aarch64,macosx-x64
+-serviceability/sa/ClhsdbFindPC.java#id3  8294316,8269982,8267433 macosx-aarch64,macosx-x64
+-serviceability/sa/ClhsdbPmap.java#id1  8294316,8269982,8267433 macosx-aarch64,macosx-x64
+-serviceability/sa/ClhsdbPstack.java#id1  8294316,8269982,8267433 macosx-aarch64,macosx-x64
+-serviceability/sa/TestJmapCore.java  8294316,8269982,8267433 macosx-aarch64,macosx-x64
+-serviceability/sa/TestJmapCoreMetaspace.java  8294316,8269982,8267433 macosx-aarch64,macosx-x64
++serviceability/sa/ClhsdbCDSCore.java  8294316,8267433 macosx-x64
++serviceability/sa/ClhsdbFindPC.java#id1  8294316,8267433 macosx-x64
++serviceability/sa/ClhsdbFindPC.java#id3  8294316,8267433 macosx-x64
++serviceability/sa/ClhsdbPmap.java#id1  8294316,8267433 macosx-x64
++serviceability/sa/ClhsdbPstack.java#id1  8294316,8267433 macosx-x64
++serviceability/sa/TestJmapCore.java  8294316,8267433 macosx-x64
++serviceability/sa/TestJmapCoreMetaspace.java  8294316,8267433 macosx-x64
+ 
+ #############################################################################
+ 
+diff --git a/test/hotspot/jtreg/serviceability/sa/ClhsdbCDSCore.java b/test/hotspot/jtreg/serviceability/sa/ClhsdbCDSCore.java
+index 1f705d3526b..3655a8c8847 100644
+--- a/test/hotspot/jtreg/serviceability/sa/ClhsdbCDSCore.java
++++ b/test/hotspot/jtreg/serviceability/sa/ClhsdbCDSCore.java
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -82,6 +82,7 @@ public static void main(String[] args) throws Exception {
+                 "-Xshare:auto",
+                 "-XX:+ProfileInterpreter",
+                 "--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED",
++                CoreUtils.getAlwaysPretouchArg(true),
+                 CrashApp.class.getName()
+             };
+ 
+diff --git a/test/hotspot/jtreg/serviceability/sa/ClhsdbFindPC.java b/test/hotspot/jtreg/serviceability/sa/ClhsdbFindPC.java
+index ed712294143..3a4be1880a0 100644
+--- a/test/hotspot/jtreg/serviceability/sa/ClhsdbFindPC.java
++++ b/test/hotspot/jtreg/serviceability/sa/ClhsdbFindPC.java
+@@ -93,9 +93,9 @@ private static void testFindPC(boolean withXcomp, boolean withCore) throws Excep
+             theApp = new LingeredApp();
+             theApp.setForceCrash(withCore);
+             if (withXcomp) {
+-                LingeredApp.startApp(theApp, "-Xcomp");
++                LingeredApp.startApp(theApp, "-Xcomp", CoreUtils.getAlwaysPretouchArg(withCore));
+             } else {
+-                LingeredApp.startApp(theApp, "-Xint");
++                LingeredApp.startApp(theApp, "-Xint", CoreUtils.getAlwaysPretouchArg(withCore));
+             }
+             System.out.print("Started LingeredApp ");
+             if (withXcomp) {
+diff --git a/test/hotspot/jtreg/serviceability/sa/ClhsdbPmap.java b/test/hotspot/jtreg/serviceability/sa/ClhsdbPmap.java
+index 6f0023a21e9..e8a2209f923 100644
+--- a/test/hotspot/jtreg/serviceability/sa/ClhsdbPmap.java
++++ b/test/hotspot/jtreg/serviceability/sa/ClhsdbPmap.java
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -60,7 +60,7 @@ public static void main(String[] args) throws Exception {
+             ClhsdbLauncher test = new ClhsdbLauncher();
+             theApp = new LingeredApp();
+             theApp.setForceCrash(withCore);
+-            LingeredApp.startApp(theApp);
++            LingeredApp.startApp(theApp, CoreUtils.getAlwaysPretouchArg(withCore));
+             System.out.println("Started LingeredApp with pid " + theApp.getPid());
+ 
+             if (withCore) {
+diff --git a/test/hotspot/jtreg/serviceability/sa/ClhsdbPstack.java b/test/hotspot/jtreg/serviceability/sa/ClhsdbPstack.java
+index e4101a8c372..7429d283b0c 100644
+--- a/test/hotspot/jtreg/serviceability/sa/ClhsdbPstack.java
++++ b/test/hotspot/jtreg/serviceability/sa/ClhsdbPstack.java
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -60,7 +60,7 @@ public static void main(String[] args) throws Exception {
+             ClhsdbLauncher test = new ClhsdbLauncher();
+             theApp = new LingeredApp();
+             theApp.setForceCrash(withCore);
+-            LingeredApp.startApp(theApp);
++            LingeredApp.startApp(theApp, CoreUtils.getAlwaysPretouchArg(withCore));
+             System.out.println("Started LingeredApp with pid " + theApp.getPid());
+ 
+             if (withCore) {
+diff --git a/test/hotspot/jtreg/serviceability/sa/TestJmapCore.java b/test/hotspot/jtreg/serviceability/sa/TestJmapCore.java
+index e00cb43ddbb..34cac852c7b 100644
+--- a/test/hotspot/jtreg/serviceability/sa/TestJmapCore.java
++++ b/test/hotspot/jtreg/serviceability/sa/TestJmapCore.java
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -75,6 +75,7 @@ static void test(String type) throws Throwable {
+                 "-Xmx512m", "-XX:MaxMetaspaceSize=64m", "-XX:+CrashOnOutOfMemoryError",
+                 // The test loads lots of small classes to exhaust Metaspace, skip method
+                 // dependency verification to improve performance in debug builds.
++                CoreUtils.getAlwaysPretouchArg(true),
+                 Platform.isDebugBuild() ? "-XX:-VerifyDependencies" : "--show-version",
+                 TestJmapCore.class.getName(), type);
+ 
+diff --git a/test/lib/jdk/test/lib/util/CoreUtils.java b/test/lib/jdk/test/lib/util/CoreUtils.java
+index 95a71abb7eb..b3521a8c4a1 100644
+--- a/test/lib/jdk/test/lib/util/CoreUtils.java
++++ b/test/lib/jdk/test/lib/util/CoreUtils.java
+@@ -258,4 +258,14 @@ private static void unzipCores(File dir) {
+         }
+     }
+ 
++    public static String getAlwaysPretouchArg(boolean withCore) {
++        // macosx-aarch64 has an issue where sometimes the java heap will not be dumped to the
++        // core file. Using -XX:+AlwaysPreTouch fixes the problem.
++        if (withCore && Platform.isOSX() && Platform.isAArch64()) {
++            return "-XX:+AlwaysPreTouch";
++        } else {
++            return "-XX:-AlwaysPreTouch";
++        }
++    }
++
+ }
