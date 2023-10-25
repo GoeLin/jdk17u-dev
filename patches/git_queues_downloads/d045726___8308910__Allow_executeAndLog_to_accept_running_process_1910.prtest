@@ -1,0 +1,18 @@
+diff --git a/test/lib/jdk/test/lib/cds/CDSTestUtils.java b/test/lib/jdk/test/lib/cds/CDSTestUtils.java
+index 9840da9fa89..4ebe2491584 100644
+--- a/test/lib/jdk/test/lib/cds/CDSTestUtils.java
++++ b/test/lib/jdk/test/lib/cds/CDSTestUtils.java
+@@ -594,8 +594,12 @@ public static File getSourceFile(String name) {
+ 
+     // ============================= Logging
+     public static OutputAnalyzer executeAndLog(ProcessBuilder pb, String logName) throws Exception {
++        return executeAndLog(pb.start(), logName);
++    }
++
++    public static OutputAnalyzer executeAndLog(Process process, String logName) throws Exception {
+         long started = System.currentTimeMillis();
+-        OutputAnalyzer output = new OutputAnalyzer(pb.start());
++        OutputAnalyzer output = new OutputAnalyzer(process);
+         String logFileNameStem =
+             String.format("%04d", getNextLogCounter()) + "-" + logName;
+ 

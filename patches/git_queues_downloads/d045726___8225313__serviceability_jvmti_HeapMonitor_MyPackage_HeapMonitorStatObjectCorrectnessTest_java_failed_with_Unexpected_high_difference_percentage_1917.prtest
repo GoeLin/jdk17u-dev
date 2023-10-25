@@ -1,0 +1,143 @@
+diff --git a/test/hotspot/jtreg/ProblemList.txt b/test/hotspot/jtreg/ProblemList.txt
+index fda77c82c0a..a3c4930731a 100644
+--- a/test/hotspot/jtreg/ProblemList.txt
++++ b/test/hotspot/jtreg/ProblemList.txt
+@@ -111,8 +111,6 @@ runtime/CompressedOops/CompressedClassPointers.java 8305765 generic-all
+ serviceability/sa/sadebugd/DebugdConnectTest.java 8239062,8270326 macosx-x64,macosx-aarch64
+ serviceability/sa/TestRevPtrsForInvokeDynamic.java 8241235 generic-all
+ 
+-serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorStatIntervalTest.java 8214032 generic-all
+-serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorStatArrayCorrectnessTest.java 8224150 generic-all
+ serviceability/jvmti/ModuleAwareAgents/ThreadStart/MAAThreadStart.java 8225354 windows-all
+ serviceability/dcmd/gc/RunFinalizationTest.java 8227120 linux-all,windows-x64
+ 
+diff --git a/test/hotspot/jtreg/serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorStatArrayCorrectnessTest.java b/test/hotspot/jtreg/serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorStatArrayCorrectnessTest.java
+index d3b0d129201..032657a0a3c 100644
+--- a/test/hotspot/jtreg/serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorStatArrayCorrectnessTest.java
++++ b/test/hotspot/jtreg/serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorStatArrayCorrectnessTest.java
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+  * Copyright (c) 2018, 2019, Google and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+@@ -36,10 +36,16 @@
+ public class HeapMonitorStatArrayCorrectnessTest {
+ 
+   private static final int maxCount = 10;
+-  // Do 100000 iterations and expect maxIteration / multiplier samples.
+-  private static final int maxIteration = 100000;
++  // Do 200000 iterations and expect maxIteration / multiplier samples.
++  private static final int maxIteration = 200_000;
+   private static int array[];
+ 
++  // 15% error ensures a sanity test without becoming flaky.
++  // Flakiness is due to the fact that this test is dependent on the sampling interval, which is a
++  // statistical geometric variable around the sampling interval. This means that the test could be
++  // unlucky and not achieve the mean average fast enough for the test case.
++  private static final int acceptedErrorPercentage = 15;
++
+   private static void allocate(int size) {
+     for (int j = 0; j < maxIteration; j++) {
+       array = new int[size];
+@@ -85,11 +91,7 @@ public static void main(String[] args) {
+         expected *= 4;
+         expected /= samplingMultiplier;
+ 
+-        // 10% error ensures a sanity test without becoming flaky.
+-        // Flakiness is due to the fact that this test is dependent on the sampling interval, which is a
+-        // statistical geometric variable around the sampling interval. This means that the test could be
+-        // unlucky and not achieve the mean average fast enough for the test case.
+-        if (HeapMonitor.statsHaveExpectedNumberSamples((int) expected, 10)) {
++        if (HeapMonitor.statsHaveExpectedNumberSamples((int) expected, acceptedErrorPercentage)) {
+           break;
+         }
+       }
+diff --git a/test/hotspot/jtreg/serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorStatIntervalTest.java b/test/hotspot/jtreg/serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorStatIntervalTest.java
+index 3dd9d3d334b..e08454a4857 100644
+--- a/test/hotspot/jtreg/serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorStatIntervalTest.java
++++ b/test/hotspot/jtreg/serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorStatIntervalTest.java
+@@ -42,7 +42,7 @@ private static boolean testIntervalOnce(int interval, boolean throwIfFailure) {
+     HeapMonitor.enableSamplingEvents();
+ 
+     int allocationTotal = 10 * 1024 * 1024;
+-    int allocationIterations = 10;
++    int allocationIterations = 20;
+ 
+     double actualCount = 0;
+     for (int i = 0; i < allocationIterations; i++) {
+@@ -58,13 +58,13 @@ private static boolean testIntervalOnce(int interval, boolean throwIfFailure) {
+     double error = Math.abs(actualCount - expectedCount);
+     double errorPercentage = error / expectedCount * 100;
+ 
+-    boolean success = (errorPercentage < 10.0);
++    boolean success = (errorPercentage < 15.0);
+     System.out.println("Interval: " + interval + ", throw if failure: " + throwIfFailure
+         + " - Expected count: " + expectedCount + ", allocationIterations: " + allocationIterations
+         + ", actualCount: " + actualCount + " -> " + success);
+ 
+     if (!success && throwIfFailure) {
+-      throw new RuntimeException("Interval average over 10% for interval " + interval + " -> "
++      throw new RuntimeException("Interval average over 15% for interval " + interval + " -> "
+           + actualCount + ", " + expectedCount);
+     }
+ 
+@@ -74,7 +74,7 @@ private static boolean testIntervalOnce(int interval, boolean throwIfFailure) {
+ 
+   private static void testInterval(int interval) {
+     // Test the interval twice, it can happen that the test is "unlucky" and the interval just goes above
+-    // the 10% mark. So try again to squash flakiness.
++    // the 15% mark. So try again to squash flakiness.
+     // Flakiness is due to the fact that this test is dependent on the sampling interval, which is a
+     // statistical geometric variable around the sampling interval. This means that the test could be
+     // unlucky and not achieve the mean average fast enough for the test case.
+diff --git a/test/hotspot/jtreg/serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorStatObjectCorrectnessTest.java b/test/hotspot/jtreg/serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorStatObjectCorrectnessTest.java
+index 5ecc48b0af1..8f55dd11666 100644
+--- a/test/hotspot/jtreg/serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorStatObjectCorrectnessTest.java
++++ b/test/hotspot/jtreg/serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorStatObjectCorrectnessTest.java
+@@ -36,11 +36,15 @@
+ /** This test is checking the object allocation path works with heap sampling. */
+ public class HeapMonitorStatObjectCorrectnessTest {
+ 
+-  // Do 200000 iterations and expect maxIteration / multiplier samples.
+-  private static final int maxIteration = 200000;
++  // Do 400000 iterations and expect maxIteration / multiplier samples.
++  private static final int maxIteration = 400_000;
+   private static BigObject obj;
+ 
+-  private native static boolean statsHaveExpectedNumberSamples(int expected, int percentError);
++  // 15% error ensures a sanity test without becoming flaky.
++  // Flakiness is due to the fact that this test is dependent on the sampling interval, which is a
++  // statistical geometric variable around the sampling interval. This means that the test could be
++  // unlucky and not achieve the mean average fast enough for the test case.
++  private static final int acceptedErrorPercentage = 15;
+ 
+   private static void allocate() {
+     emptyStorage();
+@@ -83,11 +87,7 @@ private static void testBigAllocationInterval() {
+     double expected = maxIteration;
+     expected /= samplingMultiplier;
+ 
+-    // 10% error ensures a sanity test without becoming flaky.
+-    // Flakiness is due to the fact that this test is dependent on the sampling interval, which is a
+-    // statistical geometric variable around the sampling interval. This means that the test could be
+-    // unlucky and not achieve the mean average fast enough for the test case.
+-    if (!HeapMonitor.statsHaveExpectedNumberSamples((int) expected, 10)) {
++    if (!HeapMonitor.statsHaveExpectedNumberSamples((int) expected, acceptedErrorPercentage)) {
+       throw new RuntimeException("Statistics should show about " + expected + " samples.");
+     }
+   }
+@@ -108,11 +108,7 @@ private static void testEveryAllocationSampled() {
+ 
+     double expected = maxIteration;
+ 
+-    // 10% error ensures a sanity test without becoming flaky.
+-    // Flakiness is due to the fact that this test is dependent on the sampling interval, which is a
+-    // statistical geometric variable around the sampling interval. This means that the test could be
+-    // unlucky and not achieve the mean average fast enough for the test case.
+-    if (!HeapMonitor.statsHaveExpectedNumberSamples((int) expected, 10)) {
++    if (!HeapMonitor.statsHaveExpectedNumberSamples((int) expected, acceptedErrorPercentage)) {
+       throw new RuntimeException("Statistics should show about " + expected + " samples.");
+     }
+   }

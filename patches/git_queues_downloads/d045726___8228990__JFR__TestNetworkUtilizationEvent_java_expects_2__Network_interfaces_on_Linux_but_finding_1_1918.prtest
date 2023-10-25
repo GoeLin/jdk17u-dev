@@ -1,0 +1,60 @@
+diff --git a/test/jdk/ProblemList.txt b/test/jdk/ProblemList.txt
+index f8b2c057cfc..bc73a1d5386 100644
+--- a/test/jdk/ProblemList.txt
++++ b/test/jdk/ProblemList.txt
+@@ -797,7 +797,6 @@ javax/script/Test7.java                                         8239361 generic-
+ 
+ # jdk_jfr
+ 
+-jdk/jfr/event/runtime/TestNetworkUtilizationEvent.java          8228990,8229370    generic-all
+ jdk/jfr/event/compiler/TestCodeSweeper.java                     8225209    generic-all
+ jdk/jfr/event/os/TestThreadContextSwitches.java                 8247776 windows-all
+ jdk/jfr/startupargs/TestStartName.java                          8214685 windows-x64
+diff --git a/test/jdk/jdk/jfr/event/runtime/TestNetworkUtilizationEvent.java b/test/jdk/jdk/jfr/event/runtime/TestNetworkUtilizationEvent.java
+index 8c77212c352..a1b5485a5bd 100644
+--- a/test/jdk/jdk/jfr/event/runtime/TestNetworkUtilizationEvent.java
++++ b/test/jdk/jdk/jfr/event/runtime/TestNetworkUtilizationEvent.java
+@@ -59,25 +59,17 @@ public static void main(String[] args) throws Throwable {
+         String msg = "hello!";
+         byte[] buf = msg.getBytes();
+         forceEndChunk();
+-        // Send a few packets both to the loopback address as well to an
+-        // external
++        // Send a few packets to the loopback address
+         DatagramPacket packet = new DatagramPacket(buf, buf.length, InetAddress.getLoopbackAddress(), 12345);
+         for (int i = 0; i < packetSendCount; ++i) {
+             socket.send(packet);
+         }
+-        packet = new DatagramPacket(buf, buf.length, InetAddress.getByName("10.0.0.0"), 12345);
+-        for (int i = 0; i < packetSendCount; ++i) {
+-            socket.send(packet);
+-        }
+         forceEndChunk();
+         socket.close();
+-        // Now there should have been traffic on at least two different
+-        // interfaces
+         recording.stop();
+ 
+         Set<String> networkInterfaces = new HashSet<>();
+         List<RecordedEvent> events = Events.fromRecording(recording);
+-        Events.hasEvents(events);
+         for (RecordedEvent event : events) {
+             System.out.println(event);
+             Events.assertField(event, "writeRate").atLeast(0L).atMost(1000L * Integer.MAX_VALUE);
+@@ -87,13 +79,10 @@ public static void main(String[] args) throws Throwable {
+                 networkInterfaces.add(event.getString("networkInterface"));
+             }
+         }
+-
+-        if (Platform.isWindows()) {
+-            // Windows does not track statistics for the loopback
+-            // interface
++        // Windows does not track statistics for the loopback
++        // interface
++        if (!Platform.isWindows()) {
+             Asserts.assertGreaterThanOrEqual(networkInterfaces.size(), 1);
+-        } else {
+-            Asserts.assertGreaterThanOrEqual(networkInterfaces.size(), 2);
+         }
+     }
+ 
