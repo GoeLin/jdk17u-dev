@@ -1,0 +1,238 @@
+diff --git a/src/hotspot/share/metaprogramming/primitiveConversions.hpp b/src/hotspot/share/metaprogramming/primitiveConversions.hpp
+index 08806442bf4..f43cfde570c 100644
+--- a/src/hotspot/share/metaprogramming/primitiveConversions.hpp
++++ b/src/hotspot/share/metaprogramming/primitiveConversions.hpp
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -105,7 +105,7 @@ class PrimitiveConversions : public AllStatic {
+     return converter.to;
+   }
+ 
+-  // Support thin wrappers over primitive types.
++  // Support thin wrappers over primitive types and other conversions.
+   // If derived from std::true_type, provides representational conversion
+   // from T to some other type.  When true, must provide
+   // - Value: typedef for T.
+@@ -114,7 +114,20 @@ class PrimitiveConversions : public AllStatic {
+   //   the same value representation as x.
+   // - static T recover(Decayed x): return a value of type T with the
+   //   same value representation as x.
+-  template<typename T> struct Translate : public std::false_type {};
++  template<typename T, typename Enable = void>
++  struct Translate : public std::false_type {};
++};
++
++// Enum types translate to/from their underlying type.
++template<typename T>
++struct PrimitiveConversions::Translate<T, std::enable_if_t<std::is_enum<T>::value>>
++  : public std::true_type
++{
++  using Value = T;
++  using Decayed = std::underlying_type_t<T>;
++
++  static constexpr Decayed decay(Value x) { return static_cast<Decayed>(x); }
++  static constexpr Value recover(Decayed x) { return static_cast<Value>(x); }
+ };
+ 
+ // jfloat and jdouble translation to integral types
+diff --git a/src/hotspot/share/runtime/atomic.hpp b/src/hotspot/share/runtime/atomic.hpp
+index 7a71b6ce4f2..0c647aaba47 100644
+--- a/src/hotspot/share/runtime/atomic.hpp
++++ b/src/hotspot/share/runtime/atomic.hpp
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 1999, 2019, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 1999, 2022, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -380,12 +380,12 @@ struct Atomic::IsPointerConvertible<From*, To*> : AllStatic {
+   static const bool value = (sizeof(yes) == sizeof(test(test_value)));
+ };
+ 
+-// Handle load for pointer, integral and enum types.
++// Handle load for pointer and integral types.
+ template<typename T, typename PlatformOp>
+ struct Atomic::LoadImpl<
+   T,
+   PlatformOp,
+-  typename EnableIf<IsIntegral<T>::value || std::is_enum<T>::value || IsPointer<T>::value>::type>
++  typename EnableIf<IsIntegral<T>::value || IsPointer<T>::value>::type>
+ {
+   T operator()(T const volatile* dest) const {
+     // Forward to the platform handler for the size of T.
+@@ -430,14 +430,14 @@ struct Atomic::PlatformLoad {
+   }
+ };
+ 
+-// Handle store for integral and enum types.
++// Handle store for integral types.
+ //
+ // All the involved types must be identical.
+ template<typename T, typename PlatformOp>
+ struct Atomic::StoreImpl<
+   T, T,
+   PlatformOp,
+-  typename EnableIf<IsIntegral<T>::value || std::is_enum<T>::value>::type>
++  typename EnableIf<IsIntegral<T>::value>::type>
+ {
+   void operator()(T volatile* dest, T new_value) const {
+     // Forward to the platform handler for the size of T.
+@@ -733,13 +733,13 @@ inline bool Atomic::replace_if_null(D* volatile* dest, T* value,
+   return expected_null == cmpxchg(dest, expected_null, value, order);
+ }
+ 
+-// Handle cmpxchg for integral and enum types.
++// Handle cmpxchg for integral types.
+ //
+ // All the involved types must be identical.
+ template<typename T>
+ struct Atomic::CmpxchgImpl<
+   T, T, T,
+-  typename EnableIf<IsIntegral<T>::value || std::is_enum<T>::value>::type>
++  typename EnableIf<IsIntegral<T>::value>::type>
+ {
+   T operator()(T volatile* dest, T compare_value, T exchange_value,
+                atomic_memory_order order) const {
+@@ -868,13 +868,13 @@ inline T Atomic::CmpxchgByteUsingInt::operator()(T volatile* dest,
+   return PrimitiveConversions::cast<T>(get_byte_in_int(cur, idx));
+ }
+ 
+-// Handle xchg for integral and enum types.
++// Handle xchg for integral types.
+ //
+ // All the involved types must be identical.
+ template<typename T>
+ struct Atomic::XchgImpl<
+   T, T,
+-  typename EnableIf<IsIntegral<T>::value || std::is_enum<T>::value>::type>
++  typename EnableIf<IsIntegral<T>::value>::type>
+ {
+   T operator()(T volatile* dest, T exchange_value, atomic_memory_order order) const {
+     // Forward to the platform handler for the size of T.
+diff --git a/test/hotspot/gtest/metaprogramming/test_primitiveConversions.cpp b/test/hotspot/gtest/metaprogramming/test_primitiveConversions.cpp
+index f143e28feee..e9c70b11562 100644
+--- a/test/hotspot/gtest/metaprogramming/test_primitiveConversions.cpp
++++ b/test/hotspot/gtest/metaprogramming/test_primitiveConversions.cpp
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -171,3 +171,20 @@ TEST(PrimitiveConversionsTest, round_trip_ptr) {
+   EXPECT_EQ(cpfive, PrimitiveConversions::cast<const int*>(PrimitiveConversions::cast<SIP>(cpfive)));
+   EXPECT_EQ(cpfive, PrimitiveConversions::cast<const int*>(PrimitiveConversions::cast<UIP>(cpfive)));
+ }
++
++TEST(PrimitiveConversionsTranslateTest, unscoped_enum) {
++  enum TestEnum : int { A, B, C };
++
++  EXPECT_TRUE(PrimitiveConversions::Translate<TestEnum>::value);
++  EXPECT_EQ(PrimitiveConversions::Translate<TestEnum>::decay(B), 1);
++  EXPECT_EQ(PrimitiveConversions::Translate<TestEnum>::recover(1), B);
++}
++
++TEST(PrimitiveConversionsTranslateTest, scoped_enum) {
++  enum class TestEnum { A, B, C };
++
++  EXPECT_TRUE(PrimitiveConversions::Translate<TestEnum>::value);
++  EXPECT_EQ(PrimitiveConversions::Translate<TestEnum>::decay(TestEnum::B), 1);
++  EXPECT_EQ(PrimitiveConversions::Translate<TestEnum>::recover(1), TestEnum::B);
++}
++
+diff --git a/test/hotspot/gtest/runtime/test_atomic.cpp b/test/hotspot/gtest/runtime/test_atomic.cpp
+new file mode 100644
+index 00000000000..ad346df3c6d
+--- /dev/null
++++ b/test/hotspot/gtest/runtime/test_atomic.cpp
+@@ -0,0 +1,83 @@
++/*
++ * Copyright (c) 2022, Oracle and/or its affiliates. All rights reserved.
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ *
++ * This code is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License version 2 only, as
++ * published by the Free Software Foundation.
++ *
++ * This code is distributed in the hope that it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++ * version 2 for more details (a copy is included in the LICENSE file that
++ * accompanied this code).
++ *
++ * You should have received a copy of the GNU General Public License version
++ * 2 along with this work; if not, write to the Free Software Foundation,
++ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
++ *
++ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
++ * or visit www.oracle.com if you need additional information or have any
++ * questions.
++ *
++ */
++
++#include "precompiled.hpp"
++#include "runtime/atomic.hpp"
++#include "unittest.hpp"
++
++// These tests of Atomic only verify functionality.  They don't verify atomicity.
++
++template<typename T>
++struct AtomicEnumTestSupport {
++  volatile T _test_value;
++
++  AtomicEnumTestSupport() : _test_value{} {}
++
++  void test_store_load(T value) {
++    EXPECT_NE(value, Atomic::load(&_test_value));
++    Atomic::store(&_test_value, value);
++    EXPECT_EQ(value, Atomic::load(&_test_value));
++  }
++
++  void test_cmpxchg(T value1, T value2) {
++    EXPECT_NE(value1, Atomic::load(&_test_value));
++    Atomic::store(&_test_value, value1);
++    EXPECT_EQ(value1, Atomic::cmpxchg(&_test_value, value2, value2));
++    EXPECT_EQ(value1, Atomic::load(&_test_value));
++    EXPECT_EQ(value1, Atomic::cmpxchg(&_test_value, value1, value2));
++    EXPECT_EQ(value2, Atomic::load(&_test_value));
++  }
++
++  void test_xchg(T value1, T value2) {
++    EXPECT_NE(value1, Atomic::load(&_test_value));
++    Atomic::store(&_test_value, value1);
++    EXPECT_EQ(value1, Atomic::xchg(&_test_value, value2));
++    EXPECT_EQ(value2, Atomic::load(&_test_value));
++  }
++};
++
++namespace AtomicEnumTestUnscoped {       // Scope the enumerators.
++  enum TestEnum { A, B, C };
++}
++
++TEST(AtomicEnumTest, unscoped_enum) {
++  using namespace AtomicEnumTestUnscoped;
++  using Support = AtomicEnumTestSupport<TestEnum>;
++
++  Support().test_store_load(B);
++  Support().test_cmpxchg(B, C);
++  Support().test_xchg(B, C);
++}
++
++enum class AtomicEnumTestScoped { A, B, C };
++
++TEST(AtomicEnumTest, scoped_enum) {
++  const AtomicEnumTestScoped B = AtomicEnumTestScoped::B;
++  const AtomicEnumTestScoped C = AtomicEnumTestScoped::C;
++  using Support = AtomicEnumTestSupport<AtomicEnumTestScoped>;
++
++  Support().test_store_load(B);
++  Support().test_cmpxchg(B, C);
++  Support().test_xchg(B, C);
++}

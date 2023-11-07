@@ -1,0 +1,412 @@
+diff --git a/src/jdk.jdwp.agent/share/native/libjdwp/debugInit.c b/src/jdk.jdwp.agent/share/native/libjdwp/debugInit.c
+index 860b5cc1903..1ea02415164 100644
+--- a/src/jdk.jdwp.agent/share/native/libjdwp/debugInit.c
++++ b/src/jdk.jdwp.agent/share/native/libjdwp/debugInit.c
+@@ -102,7 +102,7 @@ static void JNICALL cbEarlyVMDeath(jvmtiEnv*, JNIEnv *);
+ static void JNICALL cbEarlyException(jvmtiEnv*, JNIEnv *,
+             jthread, jmethodID, jlocation, jobject, jmethodID, jlocation);
+ 
+-static void initialize(JNIEnv *env, jthread thread, EventIndex triggering_ei);
++static void initialize(JNIEnv *env, jthread thread, EventIndex triggering_ei, EventInfo *opt_info);
+ static jboolean parseOptions(char *str);
+ 
+ /*
+@@ -438,7 +438,7 @@ cbEarlyVMInit(jvmtiEnv *jvmti_env, JNIEnv *env, jthread thread)
+         EXIT_ERROR(AGENT_ERROR_INTERNAL,"VM dead at VM_INIT time");
+     }
+     if (initOnStartup)
+-        initialize(env, thread, EI_VM_INIT);
++        initialize(env, thread, EI_VM_INIT, NULL);
+     vmInitialized = JNI_TRUE;
+     LOG_MISC(("END cbEarlyVMInit"));
+ }
+@@ -491,6 +491,16 @@ cbEarlyException(jvmtiEnv *jvmti_env, JNIEnv *env,
+         LOG_MISC(("VM is not initialized yet"));
+         return;
+     }
++    EventInfo info;
++    info.ei = EI_EXCEPTION;
++    info.thread = thread;
++    info.clazz = getMethodClass(jvmti_env, method);
++    info.method = method;
++    info.location = location;
++    info.object = exception;
++    info.u.exception.catch_clazz = getMethodClass(jvmti_env, catch_method);
++    info.u.exception.catch_method = catch_method;
++    info.u.exception.catch_location = catch_location;
+ 
+     /*
+      * We want to preserve any current exception that might get wiped
+@@ -505,24 +515,22 @@ cbEarlyException(jvmtiEnv *jvmti_env, JNIEnv *env,
+     if (initOnUncaught && catch_method == NULL) {
+ 
+         LOG_MISC(("Initializing on uncaught exception"));
+-        initialize(env, thread, EI_EXCEPTION);
++        initialize(env, thread, EI_EXCEPTION, &info);
+ 
+     } else if (initOnException != NULL) {
+ 
+-        jclass clazz;
+-
+-        /* Get class of exception thrown */
+-        clazz = JNI_FUNC_PTR(env,GetObjectClass)(env, exception);
+-        if ( clazz != NULL ) {
++        jclass exception_clazz = JNI_FUNC_PTR(env, GetObjectClass)(env, exception);
++        /* check class of exception thrown */
++        if ( exception_clazz != NULL ) {
+             char *signature = NULL;
+             /* initing on throw, check */
+-            error = classSignature(clazz, &signature, NULL);
++            error = classSignature(exception_clazz, &signature, NULL);
+             LOG_MISC(("Checking specific exception: looking for %s, got %s",
+                         initOnException, signature));
+             if ( (error==JVMTI_ERROR_NONE) &&
+                 (strcmp(signature, initOnException) == 0)) {
+                 LOG_MISC(("Initializing on specific exception"));
+-                initialize(env, thread, EI_EXCEPTION);
++                initialize(env, thread, EI_EXCEPTION, &info);
+             } else {
+                 error = AGENT_ERROR_INTERNAL; /* Just to cause restore */
+             }
+@@ -663,9 +671,11 @@ jniFatalError(JNIEnv *env, const char *msg, jvmtiError error, int exit_code)
+ 
+ /*
+  * Initialize debugger back end modules
++ *
++ * @param opt_info optional event info to use, might be null
+  */
+ static void
+-initialize(JNIEnv *env, jthread thread, EventIndex triggering_ei)
++initialize(JNIEnv *env, jthread thread, EventIndex triggering_ei, EventInfo *opt_info)
+ {
+     jvmtiError error;
+     EnumerateArg arg;
+@@ -753,13 +763,13 @@ initialize(JNIEnv *env, jthread thread, EventIndex triggering_ei)
+          * can get in the queue (from other not-yet-suspended threads)
+          * before this one does. (Also need to handle allocation error below?)
+          */
+-        EventInfo info;
+         struct bag *initEventBag;
+-        LOG_MISC(("triggering_ei != EI_VM_INIT"));
++        LOG_MISC(("triggering_ei == EI_EXCEPTION"));
++        JDI_ASSERT(triggering_ei == EI_EXCEPTION);
++        JDI_ASSERT(opt_info != NULL);
+         initEventBag = eventHelper_createEventBag();
+-        (void)memset(&info,0,sizeof(info));
+-        info.ei = triggering_ei;
+-        eventHelper_recordEvent(&info, 0, suspendPolicy, initEventBag);
++        threadControl_onEventHandlerEntry(currentSessionID, opt_info, NULL);
++        eventHelper_recordEvent(opt_info, 0, suspendPolicy, initEventBag);
+         (void)eventHelper_reportEvents(currentSessionID, initEventBag);
+         bagDestroyBag(initEventBag);
+     }
+@@ -1394,7 +1404,7 @@ JNIEXPORT char const* JNICALL debugInit_startDebuggingViaCommand(JNIEnv* env, jt
+     if (!startedViaJcmd) {
+         startedViaJcmd = JNI_TRUE;
+         is_first_start = JNI_TRUE;
+-        initialize(env, thread, EI_VM_INIT);
++        initialize(env, thread, EI_VM_INIT, NULL);
+     }
+ 
+     bagEnumerateOver(transports, getFirstTransport, &spec);
+diff --git a/test/jdk/com/sun/jdi/JdwpOnThrowTest.java b/test/jdk/com/sun/jdi/JdwpOnThrowTest.java
+new file mode 100644
+index 00000000000..d083b2a0e84
+--- /dev/null
++++ b/test/jdk/com/sun/jdi/JdwpOnThrowTest.java
+@@ -0,0 +1,157 @@
++/*
++ * Copyright (c) 2023 SAP SE. All rights reserved.
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ *
++ * This code is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License version 2 only, as
++ * published by the Free Software Foundation.
++ *
++ * This code is distributed in the hope that it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++ * version 2 for more details (a copy is included in the LICENSE file that
++ * accompanied this code).
++ *
++ * You should have received a copy of the GNU General Public License version
++ * 2 along with this work; if not, write to the Free Software Foundation,
++ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
++ *
++ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
++ * or visit www.oracle.com if you need additional information or have any
++ * questions.
++ */
++
++import com.sun.jdi.Bootstrap;
++import com.sun.jdi.VirtualMachine;
++import com.sun.jdi.connect.AttachingConnector;
++import com.sun.jdi.connect.Connector;
++import com.sun.jdi.connect.IllegalConnectorArgumentsException;
++import com.sun.jdi.event.EventIterator;
++import com.sun.jdi.event.EventQueue;
++import com.sun.jdi.event.EventSet;
++import com.sun.jdi.event.Event;
++import com.sun.jdi.event.ExceptionEvent;
++import lib.jdb.Debuggee;
++
++import java.io.IOException;
++import java.net.ServerSocket;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Map;
++
++/*
++ * @test
++ * @bug 8317920
++ * @summary Tests for JDWP agent to send valid exception event with onthrow option
++ * @library /test/lib
++ *
++ * @build ThrowCaughtException JdwpOnThrowTest
++ * @run main/othervm JdwpOnThrowTest
++ */
++public class JdwpOnThrowTest {
++
++    private static long TIMEOUT = 10000;
++
++    private static String ATTACH_CONNECTOR = "com.sun.jdi.SocketAttach";
++    // cache socket attaching connector
++    private static AttachingConnector attachingConnector;
++
++    public static void main(String[] args) throws Exception {
++        int port = findFreePort();
++        try (Debuggee debuggee = Debuggee.launcher("ThrowCaughtException").setAddress("localhost:" + port)
++                                         .enableOnThrow("Ex", "Start").setSuspended(true).launch()) {
++            VirtualMachine vm = null;
++            try {
++                vm = attach("localhost", "" + port);
++                EventQueue queue = vm.eventQueue();
++                log("Waiting for exception event");
++                long start = System.currentTimeMillis();
++                while (start + TIMEOUT > System.currentTimeMillis()) {
++                    EventSet eventSet = queue.remove(TIMEOUT);
++                    EventIterator eventIterator = eventSet.eventIterator();
++                    while(eventIterator.hasNext() && start + TIMEOUT > System.currentTimeMillis()) {
++                        Event event = eventIterator.next();
++                        if (event instanceof ExceptionEvent ex) {
++                            verifyExceptionEvent(ex);
++                            log("Received exception event: " + event);
++                            vm.dispose();
++                            return;
++                        }
++                        log("Received event: " + event);
++                    }
++                }
++                throw new RuntimeException("ERROR: failed to receive exception event");
++            } catch (IOException ex) {
++                throw new RuntimeException("ERROR: failed to attach", ex);
++            }
++        }
++    }
++
++    private static void verifyExceptionEvent(ExceptionEvent ex) throws Exception {
++        if (ex.exception() == null) {
++            throw new RuntimeException("Exception is null");
++        }
++        if (ex.exception().type() == null) {
++            throw new RuntimeException("Exception type is null");
++        }
++        if (ex.exception().referenceType() == null) {
++            throw new RuntimeException("Exception reference type is null");
++        }
++        if (ex.catchLocation() == null) {
++            throw new RuntimeException("Exception catch location is null");
++        }
++        if (!ex.location().equals(ex.thread().frame(0).location())) {
++            throw new RuntimeException(
++                String.format("Throw location %s and location of first frame %s are not equal",
++                                ex.location(), ex.thread().frame(0).location()));
++        }
++        if (!ex.exception().type().name().equals("Ex")) {
++            throw new RuntimeException("Exception has wrong type: " + ex.exception().type().name());
++        }
++    }
++
++    private static int findFreePort() {
++        try (ServerSocket socket = new ServerSocket(0)) {
++            return socket.getLocalPort();
++        } catch (IOException e) {
++            throw new RuntimeException(e);
++        }
++    }
++
++    private static VirtualMachine attach(String address, String port) throws IOException {
++        if (attachingConnector == null) {
++            attachingConnector = (AttachingConnector)getConnector(ATTACH_CONNECTOR);
++        }
++        Map<String, Connector.Argument> args = attachingConnector.defaultArguments();
++        setConnectorArg(args, "hostname", address);
++        setConnectorArg(args, "port", port);
++        try {
++            return attachingConnector.attach(args);
++        } catch (IllegalConnectorArgumentsException e) {
++            // unexpected.. wrap in RuntimeException
++            throw new RuntimeException(e);
++        }
++    }
++
++    private static Connector getConnector(String name) {
++        for (Connector connector : Bootstrap.virtualMachineManager().allConnectors()) {
++            if (connector.name().equalsIgnoreCase(name)) {
++                return connector;
++            }
++        }
++        throw new IllegalArgumentException("Connector " + name + " not found");
++    }
++
++    private static void setConnectorArg(Map<String, Connector.Argument> args, String name, String value) {
++        Connector.Argument arg = args.get(name);
++        if (arg == null) {
++            throw new IllegalArgumentException("Argument " + name + " is not defined");
++        }
++        arg.setValue(value);
++    }
++
++    private static void log(Object o) {
++        System.out.println(String.valueOf(o));
++    }
++
++}
+diff --git a/test/jdk/com/sun/jdi/ThrowCaughtException.java b/test/jdk/com/sun/jdi/ThrowCaughtException.java
+new file mode 100644
+index 00000000000..38253ad8875
+--- /dev/null
++++ b/test/jdk/com/sun/jdi/ThrowCaughtException.java
+@@ -0,0 +1,36 @@
++/*
++ * Copyright (c) 2023 SAP SE. All rights reserved.
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ *
++ * This code is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License version 2 only, as
++ * published by the Free Software Foundation.
++ *
++ * This code is distributed in the hope that it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++ * version 2 for more details (a copy is included in the LICENSE file that
++ * accompanied this code).
++ *
++ * You should have received a copy of the GNU General Public License version
++ * 2 along with this work; if not, write to the Free Software Foundation,
++ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
++ *
++ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
++ * or visit www.oracle.com if you need additional information or have any
++ * questions.
++ */
++
++ public class ThrowCaughtException {
++    public static void main(String args[]) throws Exception {
++        try {
++            System.out.println("Start");
++            throw new Ex();
++        } catch (Exception e) {
++            System.out.println(e);
++        }
++    }
++}
++
++class Ex extends RuntimeException {
++}
+diff --git a/test/jdk/com/sun/jdi/lib/jdb/Debuggee.java b/test/jdk/com/sun/jdi/lib/jdb/Debuggee.java
+index 71b3eb28d6d..b1a1b58e458 100644
+--- a/test/jdk/com/sun/jdi/lib/jdb/Debuggee.java
++++ b/test/jdk/com/sun/jdi/lib/jdb/Debuggee.java
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -69,6 +69,9 @@ public static class Launcher {
+         private String transport = "dt_socket";
+         private String address = null;
+         private boolean suspended = true;
++        private String onthrow = "";
++        private boolean waitForPortPrint = true;
++        private String expectedOutputBeforeThrow = "";
+ 
+         private Launcher(String mainClass) {
+             this.mainClass = mainClass;
+@@ -101,21 +104,31 @@ public Launcher setSuspended(boolean value) {
+             return this;
+         }
+ 
++        // required to pass non null port with address and emit string before the throw
++        public Launcher enableOnThrow(String value, String expectedOutputBeforeThrow) {
++            this.onthrow = value;
++            this.waitForPortPrint = false;
++            this.expectedOutputBeforeThrow = expectedOutputBeforeThrow;
++            return this;
++        }
++
+         public ProcessBuilder prepare() {
+             List<String> debuggeeArgs = new LinkedList<>();
+             if (vmOptions != null) {
+                 debuggeeArgs.add(vmOptions);
+             }
++            String onthrowArgs = onthrow.isEmpty() ? "" : ",onthrow=" + onthrow + ",launch=exit";
+             debuggeeArgs.add("-agentlib:jdwp=transport=" + transport
+                     + (address == null ? "" : ",address=" + address)
+-                    + ",server=y,suspend=" + (suspended ? "y" : "n"));
++                    + ",server=y,suspend=" + (suspended ? "y" : "n")
++                    + onthrowArgs);
+             debuggeeArgs.addAll(options);
+             debuggeeArgs.add(mainClass);
+             return ProcessTools.createTestJvm(debuggeeArgs);
+         }
+ 
+         public Debuggee launch(String name) {
+-            return new Debuggee(prepare(), name);
++            return new Debuggee(prepare(), name, waitForPortPrint, expectedOutputBeforeThrow);
+         }
+         public Debuggee launch() {
+             return launch("debuggee");
+@@ -123,10 +136,22 @@ public Debuggee launch() {
+     }
+ 
+     // starts the process, waits for "Listening for transport" output and detects transport/address
+-    private Debuggee(ProcessBuilder pb, String name) {
++    private Debuggee(ProcessBuilder pb, String name, boolean waitForPortPrint, String expectedOutputBeforeThrow) {
+         // debuggeeListen[0] - transport, debuggeeListen[1] - address
+         String[] debuggeeListen = new String[2];
+         Pattern listenRegexp = Pattern.compile("Listening for transport \\b(.+)\\b at address: \\b(.+)\\b");
++        if (!waitForPortPrint) {
++            try {
++                p = ProcessTools.startProcess(name, pb, s -> {output.add(s);}, s -> {
++                    return s.equals(expectedOutputBeforeThrow);
++                }, 30, TimeUnit.SECONDS);
++            } catch (IOException | InterruptedException | TimeoutException ex) {
++                throw new RuntimeException("failed to launch debuggee", ex);
++            }
++            transport = null;
++            address = null;
++            return;
++        }
+         try {
+             p = ProcessTools.startProcess(name, pb,
+                     s -> output.add(s),  // output consumer
+@@ -175,10 +200,16 @@ public String getOutput() {
+     }
+ 
+     String getTransport() {
++        if (transport == null) {
++            throw new IllegalStateException("transport is not available");
++        }
+         return transport;
+     }
+ 
+     public String getAddress() {
++        if (address == null) {
++            throw new IllegalStateException("address is not available");
++        }
+         return address;
+     }
+ 

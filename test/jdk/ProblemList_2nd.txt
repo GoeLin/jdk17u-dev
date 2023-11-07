@@ -1,0 +1,119 @@
+###############################################################################
+#
+# This is the SAP jtreg exclude list for OpenJDK 17u-dev jdk tests.
+#
+# List of tests that should not be run by test/Makefile, for various reasons:
+#   1. Does not run with jtreg -samevm mode
+#   2. Causes problems in jtreg -samevm mode for jtreg or tests that follow it
+#   3. The test is too slow or consumes too many system resources
+#   4. The test fails when run on any official build systems
+#
+# Tests marked @ignore are not run by test/Makefile, but harmless to be listed.
+#
+# List items are testnames followed by labels, all MUST BE commented
+#   as to why they are here and use a label:
+#     generic-all   Problems on all platforms
+#     generic-ARCH  Where ARCH is one of: sparc, sparcv9, x64, i586, ppc64,
+#                   ppc64le, s390x etc
+#     OSNAME-all    Where OSNAME is one of: solaris, linux, windows, macosx, aix
+#     OSNAME-ARCH   Specific on to one OSNAME and ARCH, e.g. solaris-amd64
+#     OSNAME-REV    Specific on to one OSNAME and REV, e.g. solaris-5.8
+#
+# More than one label is allowed but must be on the same line comma seperated,
+# without spaces!
+# If there are several lines, the last one is used.
+#
+# SAP/SapMachine usage notes:
+#
+# This exclude list is a vehicle only for temporary exclusions of tests
+# or exclusions that are caused by infrastrucure specifics.
+#
+# Our first goal is to fix test issues upstream or at least open upstream
+# bugs and get the test excluded via the upstream exclusion list.
+#
+# This list is refreshed periodically from an SAP-internal version,
+# removing comments which reveal internal URLs, names or hostnames.
+#
+# It might contain additional test exclusions, specific to the SapMachine build
+# and test infrastructure. That section is found at the end of the file.
+#
+###############################################################################
+
+###############################################################################
+# New failures detected after GA or caused by changes pushed after GA of 11.
+
+# SapMachine AZ 2023-07-26
+# These two tests fail very often on our windows machines. This seems to be caused by network 
+# filtering in our infrastructure in case of a lot of datagram packets in a very short time.
+java/net/DatagramSocket/SendSize.java                                                  windows-x64
+java/nio/channels/DatagramChannel/ReceiveISA.java                                      windows-x64
+
+###############################################################################
+# New failures detected after GA of 11.0.20 (e.g. seen only in jdk11u-dev after branching 11.0.20 to jdk11u)
+
+# SapMachine CL 2023-09-19 exclude until commit is in and backported everywhere
+#security/infra/java/security/cert/CertPathValidator/certification/GoogleCA.java 8308592 generic-all
+
+###############################################################################
+# Failing new tests, unsupported new features in jdk15
+
+# SapMachine GL 2022-04-01
+# java.lang.RuntimeException: Ratio of blue to red is too great: 0.1125
+# http://sapjvm:1080/servlet/testresult?testid=244390988
+# Actually we see this only in 17+ currently, but I assume this is similar to the
+# other failures of tests rotating text in 11. We probably just don't run 11 tests
+# on a machine with the problematic fonts. Seen on ls3858, SLES 15.
+# This was ProblemListed in 11 with 8199022, and de-listed without a fix in 15
+# with 8197797. Since then we see the failure again.
+# In 11, it also fails on s390: http://sapjvm:1080/servlet/testresult?testid=244440927
+# SapMachine GL 2022-06-23
+# Now we see it on linuxaarch64 http://test.sapmachine.only.sap:1080/servlet/testresult?testid=245291925
+# Excluding on all linux.
+# SapMachine CL 2023-09-16 Try again still fails, wait for backport of https://bugs.openjdk.org/browse/JDK-8317706
+java/awt/Graphics2D/DrawString/RotTransText.java                             7043153 linux-all
+
+###############################################################################
+# Failing new tests, unsupported new features in jdk16
+
+# SapMachine AZ 2020-08-07
+# These tests fail on our PPC machines that have a stacksize bigger than 4k. Test will
+# fail on all machines that do no GC before the first output.
+# https://bugs.openjdk.java.net/browse/JDK-8248691
+# SapMachine CL 2023-10-07 Try again still fails, wait for backport of https://bugs.openjdk.org/browse/JDK-8317705
+sun/tools/jstat/jstatLineCounts1.sh                                          8248691 linux-ppc64,linux-ppc64le,aix-all
+sun/tools/jstat/jstatLineCounts2.sh                                          8248691 linux-ppc64,linux-ppc64le,aix-all
+sun/tools/jstat/jstatLineCounts3.sh                                          8248691 linux-ppc64,linux-ppc64le,aix-all
+sun/tools/jstat/jstatLineCounts4.sh                                          8248691 linux-ppc64,linux-ppc64le,aix-all
+
+# SapMachine MBS 2023-03-20: the next 2 fail on Alpine (unfortunately x64 is not soo specific)
+# see http://test.sapmachine.only.sap:1080/servlet/testresult?testid=250265398
+# see http://test.sapmachine.only.sap:1080/servlet/testresult?testid=250265399
+# SapMachine CL 2023-10-07 Try again - still fails, asked Arno and Matze
+com/sun/jdi/JdwpAllowTest.java                                                       linux-x64
+com/sun/jdi/JdwpListenTest.java                                                      linux-x64
+
+###############################################################################
+# New failures detected after GA of 17.0.9 (e.g. seen only in jdk17u-dev after branching 17.0.9 to jdk17u)
+\n\n
+###############################################################################
+#
+# This is the SAP jtreg exclude list for ALL OpenJDK jdk tests.
+#
+
+# This list is concatenated to all jdk ProblemList files passed by the
+# build to the test framework.
+# The purpose is to disable a test in all builds at once, in case it
+# fails everywhere.
+# This can be caused by external changes: Often Certificates expire,
+# or a test fails on a certain operating system we recently introduced.
+# Further someone could have backported a change before recognizing
+# it causes failures, or not knowing of failures in our, SAPs, testing.
+#
+
+# SapMachine MBS 2023-10-06 internally tracked at Oracle according to Rajan
+security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java#microsoftecc2017 generic-all
+
+# GL Probably a problem with the setup of our Win systems.
+# This ticket was opened: https://itsm.services.sap/sp?sys_id=55c9e54a97a5b5d07acf3a171153af89&view=sp&id=sap_ticket_form&table=incident
+# Eventually adapt the test to recognize the issue and pass.
+com/sun/jndi/ldap/LdapPoolTimeoutTest.java                 windows-all

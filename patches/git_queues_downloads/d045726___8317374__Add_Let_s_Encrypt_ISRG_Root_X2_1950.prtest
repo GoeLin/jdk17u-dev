@@ -1,0 +1,101 @@
+diff --git a/make/data/cacerts/letsencryptisrgx2 b/make/data/cacerts/letsencryptisrgx2
+new file mode 100644
+index 00000000000..455822e13a8
+--- /dev/null
++++ b/make/data/cacerts/letsencryptisrgx2
+@@ -0,0 +1,21 @@
++Owner: CN=ISRG Root X2, O=Internet Security Research Group, C=US
++Issuer: CN=ISRG Root X2, O=Internet Security Research Group, C=US
++Serial number: 41d29dd172eaeea780c12c6ce92f8752
++Valid from: Fri Sep 04 00:00:00 GMT 2020 until: Mon Sep 17 16:00:00 GMT 2040
++Signature algorithm name: SHA384withECDSA
++Subject Public Key Algorithm: 384-bit EC (secp384r1) key
++Version: 3
++-----BEGIN CERTIFICATE-----
++MIICGzCCAaGgAwIBAgIQQdKd0XLq7qeAwSxs6S+HUjAKBggqhkjOPQQDAzBPMQsw
++CQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJuZXQgU2VjdXJpdHkgUmVzZWFyY2gg
++R3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBYMjAeFw0yMDA5MDQwMDAwMDBaFw00
++MDA5MTcxNjAwMDBaME8xCzAJBgNVBAYTAlVTMSkwJwYDVQQKEyBJbnRlcm5ldCBT
++ZWN1cml0eSBSZXNlYXJjaCBHcm91cDEVMBMGA1UEAxMMSVNSRyBSb290IFgyMHYw
++EAYHKoZIzj0CAQYFK4EEACIDYgAEzZvVn4CDCuwJSvMWSj5cz3es3mcFDR0HttwW
+++1qLFNvicWDEukWVEYmO6gbf9yoWHKS5xcUy4APgHoIYOIvXRdgKam7mAHf7AlF9
++ItgKbppbd9/w+kHsOdx1ymgHDB/qo0IwQDAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0T
++AQH/BAUwAwEB/zAdBgNVHQ4EFgQUfEKWrt5LSDv6kviejM9ti6lyN5UwCgYIKoZI
++zj0EAwMDaAAwZQIwe3lORlCEwkSHRhtFcP9Ymd70/aTSVaYgLXTWNLxBo1BfASdW
++tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
++/q4AaOeMSQ+2b1tbFfLn
++-----END CERTIFICATE-----
+diff --git a/test/jdk/security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java b/test/jdk/security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java
+index dbdcb810c47..a890040e3a1 100644
+--- a/test/jdk/security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java
++++ b/test/jdk/security/infra/java/security/cert/CertPathValidator/certification/CAInterop.java
+@@ -136,12 +136,21 @@
+ /*
+  * @test id=letsencryptisrgx1
+  * @bug 8189131
+- * @summary Interoperability tests with Let's Encrypt CA
++ * @summary Interoperability tests with Let's Encrypt ISRG Root X1 CA
+  * @library /test/lib
+  * @build jtreg.SkippedException ValidatePathWithURL CAInterop
+  * @run main/othervm -Djava.security.debug=certpath,ocsp CAInterop letsencryptisrgx1 DEFAULT
+  */
+ 
++/*
++ * @test id=letsencryptisrgx2
++ * @bug 8317374
++ * @summary Interoperability tests with Let's Encrypt ISRG Root X2 CA
++ * @library /test/lib
++ * @build jtreg.SkippedException ValidatePathWithURL CAInterop
++ * @run main/othervm -Djava.security.debug=certpath,ocsp CAInterop letsencryptisrgx2 DEFAULT
++ */
++
+ /*
+  * @test id=globalsignrootcar6
+  * @bug 8216577
+@@ -455,6 +464,9 @@ private CATestURLs getTestURLs(String alias) {
+             case "letsencryptisrgx1" ->
+                     new CATestURLs("https://valid-isrgrootx1.letsencrypt.org",
+                             "https://revoked-isrgrootx1.letsencrypt.org");
++            case "letsencryptisrgx2" ->
++                    new CATestURLs("https://valid-isrgrootx2.letsencrypt.org",
++                            "https://revoked-isrgrootx2.letsencrypt.org");
+ 
+             case "globalsignrootcar6" ->
+                     new CATestURLs("https://valid.r6.roots.globalsign.com",
+diff --git a/test/jdk/sun/security/lib/cacerts/VerifyCACerts.java b/test/jdk/sun/security/lib/cacerts/VerifyCACerts.java
+index f8d8be1f425..5084c77e25c 100644
+--- a/test/jdk/sun/security/lib/cacerts/VerifyCACerts.java
++++ b/test/jdk/sun/security/lib/cacerts/VerifyCACerts.java
+@@ -28,7 +28,7 @@
+  *      8209452 8209506 8210432 8195793 8216577 8222089 8222133 8222137 8222136
+  *      8223499 8225392 8232019 8234245 8233223 8225068 8225069 8243321 8243320
+  *      8243559 8225072 8258630 8259312 8256421 8225081 8225082 8225083 8245654
+- *      8305975 8304760 8307134 8295894 8314960 8317373
++ *      8305975 8304760 8307134 8295894 8314960 8317373 8317374
+  * @summary Check root CA entries in cacerts file
+  */
+ import java.io.ByteArrayInputStream;
+@@ -47,12 +47,12 @@ public class VerifyCACerts {
+             + File.separator + "security" + File.separator + "cacerts";
+ 
+     // The numbers of certs now.
+-    private static final int COUNT = 98;
++    private static final int COUNT = 99;
+ 
+     // SHA-256 of cacerts, can be generated with
+     // shasum -a 256 cacerts | sed -e 's/../&:/g' | tr '[:lower:]' '[:upper:]' | cut -c1-95
+     private static final String CHECKSUM
+-            = "63:A7:1F:4F:8E:4B:A1:04:DE:BB:EC:2E:31:35:5B:5A:19:D4:B1:C0:59:62:B1:13:65:C3:AE:C7:DB:78:9A:1E";
++            = "DA:61:45:1C:93:F3:6A:30:24:68:C6:72:BC:C5:E6:E4:E3:BA:6A:AE:36:29:7B:45:53:B7:10:53:52:7D:7E:A5";
+     // Hex formatter to upper case with ":" delimiter
+     private static final HexFormat HEX = HexFormat.ofDelimiter(":").withUpperCase();
+ 
+@@ -146,6 +146,8 @@ public class VerifyCACerts {
+                     "5D:56:49:9B:E4:D2:E0:8B:CF:CA:D0:8A:3E:38:72:3D:50:50:3B:DE:70:69:48:E4:2F:55:60:30:19:E5:28:AE");
+             put("letsencryptisrgx1 [jdk]",
+                     "96:BC:EC:06:26:49:76:F3:74:60:77:9A:CF:28:C5:A7:CF:E8:A3:C0:AA:E1:1A:8F:FC:EE:05:C0:BD:DF:08:C6");
++            put("letsencryptisrgx2 [jdk]",
++                    "69:72:9B:8E:15:A8:6E:FC:17:7A:57:AF:B7:17:1D:FC:64:AD:D2:8C:2F:CA:8C:F1:50:7E:34:45:3C:CB:14:70");
+             put("luxtrustglobalrootca [jdk]",
+                     "A1:B2:DB:EB:64:E7:06:C6:16:9E:3C:41:18:B2:3B:AA:09:01:8A:84:27:66:6D:8B:F0:E2:88:91:EC:05:19:50");
+             put("quovadisrootca [jdk]",
