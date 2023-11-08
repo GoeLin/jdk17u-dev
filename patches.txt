@@ -1,0 +1,9 @@
+patches/aux_downloads/d038402_Scavenge__parallel_scanning_of_large_arrays_in_old_master___reinrich_jdk17u_dev_ps_parallel_scanning_of_large_arrays_in_old__BACKPORT.prtest *** applied
+patches/aux_downloads/i560383___onthrow_1949.prtest *** applied
+patches/aux_files/* *** skipped
+patches/git_queues_downloads/d045726___8262186__Call_X509KeyManager_chooseClientAlias_once_for_all_key_types_1885.prtest *** applied
+patches/git_queues_downloads/d045726___8291753__Add_JFR_event_for_GC_CPU_Time_1900.prtest *** applied
+patches/git_queues_downloads/d045726___8316461__Fix__make_test_outputs_TEST_SUCCESS_after_unsuccessful_exit_1953.prtest *** applied
+patches/git_queues_downloads/d045726___8317374__Add_Let_s_Encrypt_ISRG_Root_X2_1950.prtest *** applied
+patches/git_queues_files/* *** skipped
+
