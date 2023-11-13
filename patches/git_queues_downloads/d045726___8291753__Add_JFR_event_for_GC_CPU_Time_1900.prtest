@@ -1,0 +1,1293 @@
+diff --git a/src/hotspot/share/gc/g1/g1Allocator.cpp b/src/hotspot/share/gc/g1/g1Allocator.cpp
+index f36501583e4..1aca61234e5 100644
+--- a/src/hotspot/share/gc/g1/g1Allocator.cpp
++++ b/src/hotspot/share/gc/g1/g1Allocator.cpp
+@@ -91,7 +91,7 @@ bool G1Allocator::is_retained_old_region(HeapRegion* hr) {
+   return _retained_old_gc_alloc_region == hr;
+ }
+ 
+-void G1Allocator::reuse_retained_old_region(G1EvacuationInfo& evacuation_info,
++void G1Allocator::reuse_retained_old_region(G1EvacuationInfo* evacuation_info,
+                                             OldGCAllocRegion* old,
+                                             HeapRegion** retained_old) {
+   HeapRegion* retained_region = *retained_old;
+@@ -120,11 +120,11 @@ void G1Allocator::reuse_retained_old_region(G1EvacuationInfo& evacuation_info,
+     _g1h->old_set_remove(retained_region);
+     old->set(retained_region);
+     _g1h->hr_printer()->reuse(retained_region);
+-    evacuation_info.set_alloc_regions_used_before(retained_region->used());
++    evacuation_info->set_alloc_regions_used_before(retained_region->used());
+   }
+ }
+ 
+-void G1Allocator::init_gc_alloc_regions(G1EvacuationInfo& evacuation_info) {
++void G1Allocator::init_gc_alloc_regions(G1EvacuationInfo* evacuation_info) {
+   assert_at_safepoint_on_vm_thread();
+ 
+   _survivor_is_full = false;
+@@ -140,14 +140,14 @@ void G1Allocator::init_gc_alloc_regions(G1EvacuationInfo& evacuation_info) {
+                             &_retained_old_gc_alloc_region);
+ }
+ 
+-void G1Allocator::release_gc_alloc_regions(G1EvacuationInfo& evacuation_info) {
++void G1Allocator::release_gc_alloc_regions(G1EvacuationInfo* evacuation_info) {
+   uint survivor_region_count = 0;
+   for (uint node_index = 0; node_index < _num_alloc_regions; node_index++) {
+     survivor_region_count += survivor_gc_alloc_region(node_index)->count();
+     survivor_gc_alloc_region(node_index)->release();
+   }
+-  evacuation_info.set_allocation_regions(survivor_region_count +
+-                                         old_gc_alloc_region()->count());
++  evacuation_info->set_allocation_regions(survivor_region_count +
++                                          old_gc_alloc_region()->count());
+ 
+   // If we have an old GC alloc region to release, we'll save it in
+   // _retained_old_gc_alloc_region. If we don't
+diff --git a/src/hotspot/share/gc/g1/g1Allocator.hpp b/src/hotspot/share/gc/g1/g1Allocator.hpp
+index 5fbe0f52f99..c9bf3015dfc 100644
+--- a/src/hotspot/share/gc/g1/g1Allocator.hpp
++++ b/src/hotspot/share/gc/g1/g1Allocator.hpp
+@@ -68,7 +68,7 @@ class G1Allocator : public CHeapObj<mtGC> {
+   void set_survivor_full();
+   void set_old_full();
+ 
+-  void reuse_retained_old_region(G1EvacuationInfo& evacuation_info,
++  void reuse_retained_old_region(G1EvacuationInfo* evacuation_info,
+                                  OldGCAllocRegion* old,
+                                  HeapRegion** retained);
+ 
+@@ -105,8 +105,8 @@ class G1Allocator : public CHeapObj<mtGC> {
+   void init_mutator_alloc_regions();
+   void release_mutator_alloc_regions();
+ 
+-  void init_gc_alloc_regions(G1EvacuationInfo& evacuation_info);
+-  void release_gc_alloc_regions(G1EvacuationInfo& evacuation_info);
++  void init_gc_alloc_regions(G1EvacuationInfo* evacuation_info);
++  void release_gc_alloc_regions(G1EvacuationInfo* evacuation_info);
+   void abandon_gc_alloc_regions();
+   bool is_retained_old_region(HeapRegion* hr);
+ 
+diff --git a/src/hotspot/share/gc/g1/g1CollectedHeap.cpp b/src/hotspot/share/gc/g1/g1CollectedHeap.cpp
+index 2f9af5ed4f2..f554f361a93 100644
+--- a/src/hotspot/share/gc/g1/g1CollectedHeap.cpp
++++ b/src/hotspot/share/gc/g1/g1CollectedHeap.cpp
+@@ -979,7 +979,11 @@ class PostCompactionPrinterClosure: public HeapRegionClosure {
+     : _hr_printer(hr_printer) { }
+ };
+ 
+-void G1CollectedHeap::print_hrm_post_compaction() {
++void G1CollectedHeap::print_heap_after_full_collection() {
++  // Post collection region logging.
++  // We should do this after we potentially resize the heap so
++  // that all the COMMIT / UNCOMMIT events are generated before
++  // the compaction events.
+   if (_hr_printer.is_active()) {
+     PostCompactionPrinterClosure cl(hr_printer());
+     heap_region_iterate(&cl);
+@@ -1091,17 +1095,6 @@ void G1CollectedHeap::verify_after_full_collection() {
+   _ref_processor_cm->verify_no_references_recorded();
+ }
+ 
+-void G1CollectedHeap::print_heap_after_full_collection(G1HeapTransition* heap_transition) {
+-  // Post collection logging.
+-  // We should do this after we potentially resize the heap so
+-  // that all the COMMIT / UNCOMMIT events are generated before
+-  // the compaction events.
+-  print_hrm_post_compaction();
+-  heap_transition->print();
+-  print_heap_after_gc();
+-  print_heap_regions();
+-}
+-
+ bool G1CollectedHeap::do_full_collection(bool explicit_gc,
+                                          bool clear_all_soft_refs,
+                                          bool do_maximum_compaction) {
+@@ -1115,8 +1108,9 @@ bool G1CollectedHeap::do_full_collection(bool explicit_gc,
+   const bool do_clear_all_soft_refs = clear_all_soft_refs ||
+       soft_ref_policy()->should_clear_all_soft_refs();
+ 
+-  G1FullCollector collector(this, explicit_gc, do_clear_all_soft_refs, do_maximum_compaction);
++  G1FullGCMark gc_mark;
+   GCTraceTime(Info, gc) tm("Pause Full", NULL, gc_cause(), true);
++  G1FullCollector collector(this, explicit_gc, do_clear_all_soft_refs, do_maximum_compaction, gc_mark.tracer());
+ 
+   collector.prepare_collection();
+   collector.collect();
+@@ -2566,9 +2560,6 @@ void G1CollectedHeap::trace_heap(GCWhen::Type when, const GCTracer* gc_tracer) {
+ void G1CollectedHeap::gc_prologue(bool full) {
+   assert(InlineCacheBuffer::is_empty(), "should have cleaned up ICBuffer");
+ 
+-  // This summary needs to be printed before incrementing total collections.
+-  rem_set()->print_periodic_summary_info("Before GC RS summary", total_collections());
+-
+   // Update common counters.
+   increment_total_collections(full /* full gc */);
+   if (full || collector_state()->in_concurrent_start_gc()) {
+@@ -2601,9 +2592,6 @@ void G1CollectedHeap::gc_epilogue(bool full) {
+     increment_old_marking_cycles_completed(false /* concurrent */, true /* liveness_completed */);
+   }
+ 
+-  // We are at the end of the GC. Total collections has already been increased.
+-  rem_set()->print_periodic_summary_info("After GC RS summary", total_collections() - 1);
+-
+ #if COMPILER2_OR_JVMCI
+   assert(DerivedPointerTable::is_empty(), "derived pointer present");
+ #endif
+@@ -2617,9 +2605,6 @@ void G1CollectedHeap::gc_epilogue(bool full) {
+   // policy with the new heap occupancy
+   Universe::heap()->update_capacity_and_used_at_gc();
+ 
+-  // Print NUMA statistics.
+-  _numa->print_statistics();
+-
+   _collection_pause_end = Ticks::now();
+ }
+ 
+@@ -2805,10 +2790,10 @@ void G1CollectedHeap::start_new_collection_set() {
+   phase_times()->record_start_new_cset_time_ms((os::elapsedTime() - start) * 1000.0);
+ }
+ 
+-void G1CollectedHeap::calculate_collection_set(G1EvacuationInfo& evacuation_info, double target_pause_time_ms) {
++void G1CollectedHeap::calculate_collection_set(G1EvacuationInfo* evacuation_info, double target_pause_time_ms) {
+ 
+   _collection_set.finalize_initial_collection_set(target_pause_time_ms, &_survivor);
+-  evacuation_info.set_collectionset_regions(collection_set()->region_length() +
++  evacuation_info->set_collectionset_regions(collection_set()->region_length() +
+                                             collection_set()->optional_region_length());
+ 
+   _cm->verify_no_collection_set_oops();
+@@ -2903,6 +2888,64 @@ void G1CollectedHeap::gc_tracer_report_gc_end(bool concurrent_operation_is_full_
+   _gc_timer_stw->time_partitions());
+ }
+ 
++G1HeapPrinterMark::G1HeapPrinterMark(G1CollectedHeap* g1h) : _g1h(g1h), _heap_transition(g1h) {
++  // This summary needs to be printed before incrementing total collections.
++  _g1h->rem_set()->print_periodic_summary_info("Before GC RS summary", _g1h->total_collections());
++  _g1h->print_heap_before_gc();
++  _g1h->print_heap_regions();
++}
++
++G1HeapPrinterMark::~G1HeapPrinterMark() {
++  _g1h->policy()->print_age_table();
++  //_g1h->rem_set()->print_coarsen_stats();
++  // We are at the end of the GC. Total collections has already been increased.
++  _g1h->rem_set()->print_periodic_summary_info("After GC RS summary", _g1h->total_collections() - 1);
++
++  _heap_transition.print();
++  _g1h->print_heap_regions();
++  _g1h->print_heap_after_gc();
++  // Print NUMA statistics.
++  _g1h->numa()->print_statistics();
++}
++
++G1JFRTracerMark::G1JFRTracerMark(STWGCTimer* timer, GCTracer* tracer) :
++  _timer(timer), _tracer(tracer) {
++
++  _timer->register_gc_start();
++  _tracer->report_gc_start(G1CollectedHeap::heap()->gc_cause(), _timer->gc_start());
++  G1CollectedHeap::heap()->trace_heap_before_gc(_tracer);
++}
++
++G1JFRTracerMark::~G1JFRTracerMark() {
++  G1CollectedHeap::heap()->trace_heap_after_gc(_tracer);
++  _timer->register_gc_end();
++  _tracer->report_gc_end(_timer->gc_end(), _timer->time_partitions());
++}
++
++class G1YoungGCJFRTracerMark : public G1JFRTracerMark {
++  G1EvacuationInfo _evacuation_info;
++
++  G1NewTracer* tracer() const { return (G1NewTracer*)_tracer; }
++
++public:
++
++  G1EvacuationInfo* evacuation_info() { return &_evacuation_info; }
++
++  G1YoungGCJFRTracerMark(STWGCTimer* gc_timer_stw, G1NewTracer* gc_tracer_stw, GCCause::Cause cause) :
++    G1JFRTracerMark(gc_timer_stw, gc_tracer_stw), _evacuation_info() { }
++
++  void report_pause_type(G1GCPauseType type) {
++    tracer()->report_young_gc_pause(type);
++  }
++
++  ~G1YoungGCJFRTracerMark() {
++    G1CollectedHeap* g1h = G1CollectedHeap::heap();
++
++    tracer()->report_evacuation_info(&_evacuation_info);
++    tracer()->report_tenuring_threshold(g1h->policy()->tenuring_threshold());
++  }
++};
++
+ void G1CollectedHeap::do_collection_pause_at_safepoint_helper(double target_pause_time_ms) {
+   GCIdMark gc_id_mark;
+ 
+@@ -2911,14 +2954,8 @@ void G1CollectedHeap::do_collection_pause_at_safepoint_helper(double target_paus
+ 
+   policy()->note_gc_start();
+ 
+-  gc_tracer_report_gc_start();
+-
+   wait_for_root_region_scanning();
+ 
+-  print_heap_before_gc();
+-  print_heap_regions();
+-  trace_heap_before_gc(_gc_tracer_stw);
+-
+   _verifier->verify_region_sets_optional();
+   _verifier->verify_dirty_young_regions();
+ 
+@@ -2944,9 +2981,7 @@ void G1CollectedHeap::do_collection_pause_at_safepoint_helper(double target_paus
+ 
+   // Inner scope for scope based logging, timers, and stats collection
+   {
+-    G1EvacuationInfo evacuation_info;
+-
+-    GCTraceCPUTime tcpu;
++    GCTraceCPUTime tcpu(_gc_tracer_stw);
+ 
+     char young_gc_name[MaxYoungGCNameLength];
+     set_young_gc_name(young_gc_name);
+@@ -2959,11 +2994,21 @@ void G1CollectedHeap::do_collection_pause_at_safepoint_helper(double target_paus
+     active_workers = workers()->update_active_workers(active_workers);
+     log_info(gc,task)("Using %u workers of %u for evacuation", active_workers, workers()->total_workers());
+ 
++    // JFR
++    G1YoungGCJFRTracerMark jtm(_gc_timer_stw, _gc_tracer_stw, gc_cause());
+     G1MonitoringScope ms(g1mm(),
+                          false /* full_gc */,
+                          collector_state()->in_mixed_phase() /* all_memory_pools_affected */);
+ 
+-    G1HeapTransition heap_transition(this);
++    // Create the heap printer before internal pause timing to have
++    // heap information printed as last part of detailed GC log.
++    G1HeapPrinterMark hpm(this);
++    // Young GC internal pause timing
++    // GL Not (yet) in 17: G1YoungGCNotifyPauseMark npm;
++
++    // Verification may use the gang workers, so they must be set up before.
++    // Individual parallel phases may override this.
++    // GL Not (yet) in 17: set_young_collection_default_active_worker_threads();
+ 
+     {
+       IsGCActiveMark x;
+@@ -2995,7 +3040,7 @@ void G1CollectedHeap::do_collection_pause_at_safepoint_helper(double target_paus
+         // of the collection set!).
+         _allocator->release_mutator_alloc_regions();
+ 
+-        calculate_collection_set(evacuation_info, target_pause_time_ms);
++        calculate_collection_set(jtm.evacuation_info(), target_pause_time_ms);
+ 
+         G1RedirtyCardsQueueSet rdcqs(G1BarrierSet::dirty_card_queue_set().allocator());
+         G1ParScanThreadStateSet per_thread_states(this,
+@@ -3003,7 +3048,7 @@ void G1CollectedHeap::do_collection_pause_at_safepoint_helper(double target_paus
+                                                   workers()->active_workers(),
+                                                   collection_set()->young_region_length(),
+                                                   collection_set()->optional_region_length());
+-        pre_evacuate_collection_set(evacuation_info, &per_thread_states);
++        pre_evacuate_collection_set(jtm.evacuation_info(), &per_thread_states);
+ 
+         bool may_do_optional_evacuation = _collection_set.optional_region_length() != 0;
+         // Actually do the work...
+@@ -3012,7 +3057,7 @@ void G1CollectedHeap::do_collection_pause_at_safepoint_helper(double target_paus
+         if (may_do_optional_evacuation) {
+           evacuate_optional_collection_set(&per_thread_states);
+         }
+-        post_evacuate_collection_set(evacuation_info, &rdcqs, &per_thread_states);
++        post_evacuate_collection_set(jtm.evacuation_info(), &rdcqs, &per_thread_states);
+ 
+         start_new_collection_set();
+ 
+@@ -3031,7 +3076,7 @@ void G1CollectedHeap::do_collection_pause_at_safepoint_helper(double target_paus
+ 
+         // Need to report the collection pause now since record_collection_pause_end()
+         // modifies it to the next state.
+-        _gc_tracer_stw->report_young_gc_pause(collector_state()->young_gc_pause_type(concurrent_operation_is_full_mark));
++        jtm.report_pause_type(collector_state()->young_gc_pause_type(concurrent_operation_is_full_mark));
+ 
+         double sample_end_time_sec = os::elapsedTime();
+         double pause_time_ms = (sample_end_time_sec - sample_start_time_sec) * MILLIUNITS;
+@@ -3049,7 +3094,6 @@ void G1CollectedHeap::do_collection_pause_at_safepoint_helper(double target_paus
+     }
+ 
+     policy()->print_phases();
+-    heap_transition.print();
+ 
+     _hrm.verify_optional();
+     _verifier->verify_region_sets_optional();
+@@ -3057,17 +3101,11 @@ void G1CollectedHeap::do_collection_pause_at_safepoint_helper(double target_paus
+     TASKQUEUE_STATS_ONLY(print_taskqueue_stats());
+     TASKQUEUE_STATS_ONLY(reset_taskqueue_stats());
+ 
+-    print_heap_after_gc();
+-    print_heap_regions();
+-    trace_heap_after_gc(_gc_tracer_stw);
+-
+     // We must call G1MonitoringSupport::update_sizes() in the same scoping level
+     // as an active TraceMemoryManagerStats object (i.e. before the destructor for the
+     // TraceMemoryManagerStats is called) so that the G1 memory pools are updated
+     // before any GC notifications are raised.
+     g1mm()->update_sizes();
+-
+-    gc_tracer_report_gc_end(concurrent_operation_is_full_mark, evacuation_info);
+   }
+   // It should now be safe to tell the concurrent mark thread to start
+   // without its logging output interfering with the logging output
+@@ -3490,7 +3528,7 @@ class G1PrepareEvacuationTask : public AbstractGangTask {
+   }
+ };
+ 
+-void G1CollectedHeap::pre_evacuate_collection_set(G1EvacuationInfo& evacuation_info, G1ParScanThreadStateSet* per_thread_states) {
++void G1CollectedHeap::pre_evacuate_collection_set(G1EvacuationInfo* evacuation_info, G1ParScanThreadStateSet* per_thread_states) {
+   _bytes_used_during_gc = 0;
+ 
+   _expand_heap_after_alloc_failure = true;
+@@ -3756,7 +3794,7 @@ void G1CollectedHeap::evacuate_optional_collection_set(G1ParScanThreadStateSet*
+   _collection_set.abandon_optional_collection_set(per_thread_states);
+ }
+ 
+-void G1CollectedHeap::post_evacuate_collection_set(G1EvacuationInfo& evacuation_info,
++void G1CollectedHeap::post_evacuate_collection_set(G1EvacuationInfo* evacuation_info,
+                                                    G1RedirtyCardsQueueSet* rdcqs,
+                                                    G1ParScanThreadStateSet* per_thread_states) {
+   G1GCPhaseTimes* p = phase_times();
+@@ -3777,7 +3815,7 @@ void G1CollectedHeap::post_evacuate_collection_set(G1EvacuationInfo& evacuation_
+ 
+   post_evacuate_cleanup_1(per_thread_states, rdcqs);
+ 
+-  post_evacuate_cleanup_2(&_preserved_marks_set, rdcqs, &evacuation_info, per_thread_states->surviving_young_words());
++  post_evacuate_cleanup_2(&_preserved_marks_set, rdcqs, evacuation_info, per_thread_states->surviving_young_words());
+ 
+   assert_used_and_recalculate_used_equal(this);
+ 
+@@ -3785,10 +3823,8 @@ void G1CollectedHeap::post_evacuate_collection_set(G1EvacuationInfo& evacuation_
+ 
+   record_obj_copy_mem_stats();
+ 
+-  evacuation_info.set_collectionset_used_before(collection_set()->bytes_used_before());
+-  evacuation_info.set_bytes_used(_bytes_used_during_gc);
+-
+-  policy()->print_age_table();
++  evacuation_info->set_collectionset_used_before(collection_set()->bytes_used_before());
++  evacuation_info->set_bytes_used(_bytes_used_during_gc);
+ }
+ 
+ void G1CollectedHeap::record_obj_copy_mem_stats() {
+diff --git a/src/hotspot/share/gc/g1/g1CollectedHeap.hpp b/src/hotspot/share/gc/g1/g1CollectedHeap.hpp
+index d2e90a86424..50aaac4cd53 100644
+--- a/src/hotspot/share/gc/g1/g1CollectedHeap.hpp
++++ b/src/hotspot/share/gc/g1/g1CollectedHeap.hpp
+@@ -149,6 +149,7 @@ class G1CollectedHeap : public CollectedHeap {
+   friend class G1PLABAllocator;
+ 
+   // Other related classes.
++  friend class G1HeapPrinterMark;
+   friend class HeapRegionClaimer;
+ 
+   // Testing classes.
+@@ -304,10 +305,6 @@ class G1CollectedHeap : public CollectedHeap {
+   // this method will be found dead by the marking cycle).
+   void allocate_dummy_regions() PRODUCT_RETURN;
+ 
+-  // If the HR printer is active, dump the state of the regions in the
+-  // heap after a compaction.
+-  void print_hrm_post_compaction();
+-
+   // Create a memory mapper for auxiliary data structures of the given size and
+   // translation factor.
+   static G1RegionToSpaceMapper* create_aux_memory_mapper(const char* description,
+@@ -529,7 +526,7 @@ class G1CollectedHeap : public CollectedHeap {
+   void prepare_heap_for_mutators();
+   void abort_refinement();
+   void verify_after_full_collection();
+-  void print_heap_after_full_collection(G1HeapTransition* heap_transition);
++  void print_heap_after_full_collection();
+ 
+   // Helper method for satisfy_failed_allocation()
+   HeapWord* satisfy_failed_allocation_helper(size_t word_size,
+@@ -799,7 +796,7 @@ class G1CollectedHeap : public CollectedHeap {
+   void verify_before_young_collection(G1HeapVerifier::G1VerifyType type);
+   void verify_after_young_collection(G1HeapVerifier::G1VerifyType type);
+ 
+-  void calculate_collection_set(G1EvacuationInfo& evacuation_info, double target_pause_time_ms);
++  void calculate_collection_set(G1EvacuationInfo* evacuation_info, double target_pause_time_ms);
+ 
+   // Actually do the work of evacuating the parts of the collection set.
+   // The has_optional_evacuation_work flag for the initial collection set
+@@ -825,8 +822,8 @@ class G1CollectedHeap : public CollectedHeap {
+   void evacuate_next_optional_regions(G1ParScanThreadStateSet* per_thread_states);
+ 
+ public:
+-  void pre_evacuate_collection_set(G1EvacuationInfo& evacuation_info, G1ParScanThreadStateSet* pss);
+-  void post_evacuate_collection_set(G1EvacuationInfo& evacuation_info,
++  void pre_evacuate_collection_set(G1EvacuationInfo* evacuation_info, G1ParScanThreadStateSet* pss);
++  void post_evacuate_collection_set(G1EvacuationInfo* evacuation_info,
+                                     G1RedirtyCardsQueueSet* rdcqs,
+                                     G1ParScanThreadStateSet* pss);
+ 
+@@ -1466,6 +1463,7 @@ class G1CollectedHeap : public CollectedHeap {
+   void print_regions_on(outputStream* st) const;
+ 
+ public:
++
+   virtual void print_on(outputStream* st) const;
+   virtual void print_extended_on(outputStream* st) const;
+   virtual void print_on_error(outputStream* st) const;
+@@ -1483,6 +1481,28 @@ class G1CollectedHeap : public CollectedHeap {
+   virtual bool print_location(outputStream* st, void* addr) const;
+ };
+ 
++// Scoped object that performs common pre- and post-gc heap printing operations.
++class G1HeapPrinterMark : public StackObj {
++  G1CollectedHeap* _g1h;
++  G1HeapTransition _heap_transition;
++
++public:
++  G1HeapPrinterMark(G1CollectedHeap* g1h);
++  ~G1HeapPrinterMark();
++};
++
++// Scoped object that performs common pre- and post-gc operations related to
++// JFR events.
++class G1JFRTracerMark : public StackObj {
++protected:
++  STWGCTimer* _timer;
++  GCTracer* _tracer;
++
++public:
++  G1JFRTracerMark(STWGCTimer* timer, GCTracer* tracer);
++  ~G1JFRTracerMark();
++};
++
+ class G1ParEvacuateFollowersClosure : public VoidClosure {
+ private:
+   double _start_term;
+diff --git a/src/hotspot/share/gc/g1/g1ConcurrentMark.hpp b/src/hotspot/share/gc/g1/g1ConcurrentMark.hpp
+index 2f06c0d53c7..5902b9ace46 100644
+--- a/src/hotspot/share/gc/g1/g1ConcurrentMark.hpp
++++ b/src/hotspot/share/gc/g1/g1ConcurrentMark.hpp
+@@ -595,6 +595,8 @@ class G1ConcurrentMark : public CHeapObj<mtGC> {
+ 
+   ConcurrentGCTimer* gc_timer_cm() const { return _gc_timer_cm; }
+ 
++  G1OldTracer* gc_tracer_cm() const { return _gc_tracer_cm; }
++
+ private:
+   // Rebuilds the remembered sets for chosen regions in parallel and concurrently to the application.
+   void rebuild_rem_set_concurrently();
+diff --git a/src/hotspot/share/gc/g1/g1FullCollector.cpp b/src/hotspot/share/gc/g1/g1FullCollector.cpp
+index f4c58c90afa..137bf6fadf5 100644
+--- a/src/hotspot/share/gc/g1/g1FullCollector.cpp
++++ b/src/hotspot/share/gc/g1/g1FullCollector.cpp
+@@ -112,9 +112,10 @@ uint G1FullCollector::calc_active_workers() {
+ G1FullCollector::G1FullCollector(G1CollectedHeap* heap,
+                                  bool explicit_gc,
+                                  bool clear_soft_refs,
+-                                 bool do_maximum_compaction) :
++                                 bool do_maximum_compaction,
++                                 G1FullGCTracer* tracer) :
+     _heap(heap),
+-    _scope(heap->g1mm(), explicit_gc, clear_soft_refs, do_maximum_compaction),
++    _scope(heap->g1mm(), explicit_gc, clear_soft_refs, do_maximum_compaction, tracer),
+     _num_workers(calc_active_workers()),
+     _oop_queue_set(_num_workers),
+     _array_queue_set(_num_workers),
+@@ -171,9 +172,6 @@ class PrepareRegionsClosure : public HeapRegionClosure {
+ void G1FullCollector::prepare_collection() {
+   _heap->policy()->record_full_collection_start();
+ 
+-  _heap->print_heap_before_gc();
+-  _heap->print_heap_regions();
+-
+   _heap->abort_concurrent_cycle();
+   _heap->verify_before_full_collection(scope()->is_explicit_gc());
+ 
+@@ -229,7 +227,7 @@ void G1FullCollector::complete_collection() {
+ 
+   _heap->verify_after_full_collection();
+ 
+-  _heap->print_heap_after_full_collection(scope()->heap_transition());
++  _heap->print_heap_after_full_collection();
+ }
+ 
+ void G1FullCollector::before_marking_update_attribute_table(HeapRegion* hr) {
+diff --git a/src/hotspot/share/gc/g1/g1FullCollector.hpp b/src/hotspot/share/gc/g1/g1FullCollector.hpp
+index 176d7b9f5ce..5f0e5b1ff2c 100644
+--- a/src/hotspot/share/gc/g1/g1FullCollector.hpp
++++ b/src/hotspot/share/gc/g1/g1FullCollector.hpp
+@@ -31,6 +31,8 @@
+ #include "gc/g1/g1FullGCOopClosures.hpp"
+ #include "gc/g1/g1FullGCScope.hpp"
+ #include "gc/g1/g1RegionMarkStatsCache.hpp"
++#include "gc/shared/gcId.hpp"
++#include "gc/shared/gcTraceTime.hpp"
+ #include "gc/shared/preservedMarks.hpp"
+ #include "gc/shared/referenceProcessor.hpp"
+ #include "gc/shared/taskqueue.hpp"
+@@ -55,6 +57,18 @@ class G1FullGCSubjectToDiscoveryClosure: public BoolObjectClosure {
+   }
+ };
+ 
++// Full GC Mark that holds GC id and CPU time trace. Needs to be separate
++// from the G1FullCollector and G1FullGCScope to allow the Full GC logging
++// to have the same structure as the Young GC logging.
++class G1FullGCMark : StackObj {
++  GCIdMark       _gc_id;
++  G1FullGCTracer _tracer;
++  GCTraceCPUTime _cpu_time;
++public:
++  G1FullGCMark() : _gc_id(), _tracer(), _cpu_time(&_tracer) { }
++  G1FullGCTracer* tracer() { return &_tracer; }
++};
++
+ // The G1FullCollector holds data associated with the current Full GC.
+ class G1FullCollector : StackObj {
+   G1CollectedHeap*          _heap;
+@@ -81,7 +95,8 @@ class G1FullCollector : StackObj {
+   G1FullCollector(G1CollectedHeap* heap,
+                   bool explicit_gc,
+                   bool clear_soft_refs,
+-                  bool do_maximum_compaction);
++                  bool do_maximum_compaction,
++                  G1FullGCTracer* tracer);
+   ~G1FullCollector();
+ 
+   void prepare_collection();
+diff --git a/src/hotspot/share/gc/g1/g1FullGCScope.cpp b/src/hotspot/share/gc/g1/g1FullGCScope.cpp
+index 95d14930ce2..13c7b37a822 100644
+--- a/src/hotspot/share/gc/g1/g1FullGCScope.cpp
++++ b/src/hotspot/share/gc/g1/g1FullGCScope.cpp
+@@ -25,30 +25,35 @@
+ #include "precompiled.hpp"
+ #include "gc/g1/g1FullGCScope.hpp"
+ 
++G1FullGCJFRTracerMark::G1FullGCJFRTracerMark(STWGCTimer* timer, GCTracer* tracer)
++  : G1JFRTracerMark(timer, tracer) {
++
++  G1CollectedHeap::heap()->pre_full_gc_dump(_timer);
++}
++
++G1FullGCJFRTracerMark::~G1FullGCJFRTracerMark() {
++  G1CollectedHeap::heap()->post_full_gc_dump(_timer);
++}
++
+ G1FullGCScope::G1FullGCScope(G1MonitoringSupport* monitoring_support,
+                              bool explicit_gc,
+                              bool clear_soft,
+-                             bool do_maximum_compaction) :
++                             bool do_maximum_compaction,
++                             G1FullGCTracer* tracer) :
+     _rm(),
+     _explicit_gc(explicit_gc),
+     _g1h(G1CollectedHeap::heap()),
+-    _gc_id(),
+     _svc_marker(SvcGCMarker::FULL),
+     _timer(),
+-    _tracer(),
++    _tracer(tracer),
+     _active(),
+-    _cpu_time(),
++    _tracer_mark(&_timer, _tracer),
+     _soft_refs(clear_soft, _g1h->soft_ref_policy()),
+     _monitoring_scope(monitoring_support, true /* full_gc */, true /* all_memory_pools_affected */),
+-    _heap_transition(_g1h),
++    _heap_printer(_g1h),
+     _region_compaction_threshold(do_maximum_compaction ?
+                                  HeapRegion::GrainWords :
+-                                 (1 - MarkSweepDeadRatio / 100.0) * HeapRegion::GrainWords) {
+-  _timer.register_gc_start();
+-  _tracer.report_gc_start(_g1h->gc_cause(), _timer.gc_start());
+-  _g1h->pre_full_gc_dump(&_timer);
+-  _g1h->trace_heap_before_gc(&_tracer);
+-}
++                                 (1 - MarkSweepDeadRatio / 100.0) * HeapRegion::GrainWords) { }
+ 
+ G1FullGCScope::~G1FullGCScope() {
+   // We must call G1MonitoringSupport::update_sizes() in the same scoping level
+@@ -56,10 +61,6 @@ G1FullGCScope::~G1FullGCScope() {
+   // TraceMemoryManagerStats is called) so that the G1 memory pools are updated
+   // before any GC notifications are raised.
+   _g1h->g1mm()->update_sizes();
+-  _g1h->trace_heap_after_gc(&_tracer);
+-  _g1h->post_full_gc_dump(&_timer);
+-  _timer.register_gc_end();
+-  _tracer.report_gc_end(_timer.gc_end(), _timer.time_partitions());
+ }
+ 
+ bool G1FullGCScope::is_explicit_gc() {
+@@ -75,11 +76,7 @@ STWGCTimer* G1FullGCScope::timer() {
+ }
+ 
+ G1FullGCTracer* G1FullGCScope::tracer() {
+-  return &_tracer;
+-}
+-
+-G1HeapTransition* G1FullGCScope::heap_transition() {
+-  return &_heap_transition;
++  return _tracer;
+ }
+ 
+ size_t G1FullGCScope::region_compaction_threshold() {
+diff --git a/src/hotspot/share/gc/g1/g1FullGCScope.hpp b/src/hotspot/share/gc/g1/g1FullGCScope.hpp
+index e12f72b950f..1d69b049b65 100644
+--- a/src/hotspot/share/gc/g1/g1FullGCScope.hpp
++++ b/src/hotspot/share/gc/g1/g1FullGCScope.hpp
+@@ -28,8 +28,6 @@
+ #include "gc/g1/g1CollectedHeap.hpp"
+ #include "gc/g1/g1HeapTransition.hpp"
+ #include "gc/g1/g1Trace.hpp"
+-#include "gc/shared/gcId.hpp"
+-#include "gc/shared/gcTraceTime.hpp"
+ #include "gc/shared/gcTimer.hpp"
+ #include "gc/shared/gcVMOperations.hpp"
+ #include "gc/shared/isGCActiveMark.hpp"
+@@ -39,27 +37,34 @@
+ 
+ class GCMemoryManager;
+ 
++class G1FullGCJFRTracerMark : public G1JFRTracerMark {
++public:
++
++  G1FullGCJFRTracerMark(STWGCTimer* timer, GCTracer* tracer);
++  ~G1FullGCJFRTracerMark();
++};
++
+ // Class used to group scoped objects used in the Full GC together.
+ class G1FullGCScope : public StackObj {
+   ResourceMark            _rm;
+   bool                    _explicit_gc;
+   G1CollectedHeap*        _g1h;
+-  GCIdMark                _gc_id;
+   SvcGCMarker             _svc_marker;
+   STWGCTimer              _timer;
+-  G1FullGCTracer          _tracer;
++  G1FullGCTracer*         _tracer;
+   IsGCActiveMark          _active;
+-  GCTraceCPUTime          _cpu_time;
++  G1FullGCJFRTracerMark   _tracer_mark;
+   ClearedAllSoftRefs      _soft_refs;
+   G1MonitoringScope       _monitoring_scope;
+-  G1HeapTransition        _heap_transition;
++  G1HeapPrinterMark       _heap_printer;
+   size_t                  _region_compaction_threshold;
+ 
+ public:
+   G1FullGCScope(G1MonitoringSupport* monitoring_support,
+                 bool explicit_gc,
+                 bool clear_soft,
+-                bool do_maximal_compaction);
++                bool do_maximal_compaction,
++                G1FullGCTracer* tracer);
+   ~G1FullGCScope();
+ 
+   bool is_explicit_gc();
+diff --git a/src/hotspot/share/gc/g1/g1VMOperations.cpp b/src/hotspot/share/gc/g1/g1VMOperations.cpp
+index 59004af9a90..ca50b427fdb 100644
+--- a/src/hotspot/share/gc/g1/g1VMOperations.cpp
++++ b/src/hotspot/share/gc/g1/g1VMOperations.cpp
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2001, 2021, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2001, 2022, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -27,6 +27,7 @@
+ #include "gc/g1/g1ConcurrentMarkThread.inline.hpp"
+ #include "gc/g1/g1Policy.hpp"
+ #include "gc/g1/g1VMOperations.hpp"
++#include "gc/g1/g1Trace.hpp"
+ #include "gc/shared/concurrentGCBreakpoints.hpp"
+ #include "gc/shared/gcCause.hpp"
+ #include "gc/shared/gcId.hpp"
+@@ -161,8 +162,8 @@ void VM_G1CollectForAllocation::doit() {
+ 
+ void VM_G1PauseConcurrent::doit() {
+   GCIdMark gc_id_mark(_gc_id);
+-  GCTraceCPUTime tcpu;
+   G1CollectedHeap* g1h = G1CollectedHeap::heap();
++  GCTraceCPUTime tcpu(g1h->concurrent_mark()->gc_tracer_cm());
+ 
+   // GCTraceTime(...) only supports sub-phases, so a more verbose version
+   // is needed when we report the top-level pause phase.
+diff --git a/src/hotspot/share/gc/parallel/psParallelCompact.cpp b/src/hotspot/share/gc/parallel/psParallelCompact.cpp
+index 69b7dc9881a..ce96640c2e5 100644
+--- a/src/hotspot/share/gc/parallel/psParallelCompact.cpp
++++ b/src/hotspot/share/gc/parallel/psParallelCompact.cpp
+@@ -1767,7 +1767,7 @@ bool PSParallelCompact::invoke_no_policy(bool maximum_heap_compaction) {
+                                         Threads::number_of_non_daemon_threads());
+     ParallelScavengeHeap::heap()->workers().update_active_workers(active_workers);
+ 
+-    GCTraceCPUTime tcpu;
++    GCTraceCPUTime tcpu(&_gc_tracer);
+     GCTraceTime(Info, gc) tm("Pause Full", NULL, gc_cause, true);
+ 
+     heap->pre_full_gc_dump(&_gc_timer);
+diff --git a/src/hotspot/share/gc/parallel/psScavenge.cpp b/src/hotspot/share/gc/parallel/psScavenge.cpp
+index 20d5caaa84d..23a14b31bdf 100644
+--- a/src/hotspot/share/gc/parallel/psScavenge.cpp
++++ b/src/hotspot/share/gc/parallel/psScavenge.cpp
+@@ -417,7 +417,7 @@ bool PSScavenge::invoke_no_policy() {
+   {
+     ResourceMark rm;
+ 
+-    GCTraceCPUTime tcpu;
++    GCTraceCPUTime tcpu(&_gc_tracer);
+     GCTraceTime(Info, gc) tm("Pause Young", NULL, gc_cause, true);
+     TraceCollectorStats tcs(counters());
+     TraceMemoryManagerStats tms(heap->young_gc_manager(), gc_cause, "end of minor GC");
+diff --git a/src/hotspot/share/gc/serial/defNewGeneration.cpp b/src/hotspot/share/gc/serial/defNewGeneration.cpp
+index 7ff1f97d6fe..fb6bd96f72d 100644
+--- a/src/hotspot/share/gc/serial/defNewGeneration.cpp
++++ b/src/hotspot/share/gc/serial/defNewGeneration.cpp
+@@ -182,6 +182,8 @@ DefNewGeneration::DefNewGeneration(ReservedSpace rs,
+   _pretenure_size_threshold_words = PretenureSizeThreshold >> LogHeapWordSize;
+ 
+   _gc_timer = new (ResourceObj::C_HEAP, mtGC) STWGCTimer();
++
++  _gc_tracer = new (ResourceObj::C_HEAP, mtGC) DefNewTracer();
+ }
+ 
+ void DefNewGeneration::compute_space_boundaries(uintx minimum_eden_size,
+@@ -531,8 +533,7 @@ void DefNewGeneration::collect(bool   full,
+   SerialHeap* heap = SerialHeap::heap();
+ 
+   _gc_timer->register_gc_start();
+-  DefNewTracer gc_tracer;
+-  gc_tracer.report_gc_start(heap->gc_cause(), _gc_timer->gc_start());
++  _gc_tracer->report_gc_start(heap->gc_cause(), _gc_timer->gc_start());
+ 
+   _old_gen = heap->old_gen();
+ 
+@@ -550,7 +551,7 @@ void DefNewGeneration::collect(bool   full,
+ 
+   GCTraceTime(Trace, gc, phases) tm("DefNew", NULL, heap->gc_cause());
+ 
+-  heap->trace_heap_before_gc(&gc_tracer);
++  heap->trace_heap_before_gc(_gc_tracer);
+ 
+   // These can be shared for all code paths
+   IsAliveClosure is_alive(this);
+@@ -594,8 +595,8 @@ void DefNewGeneration::collect(bool   full,
+   ReferenceProcessorPhaseTimes pt(_gc_timer, rp->max_num_queues());
+   SerialGCRefProcProxyTask task(is_alive, keep_alive, evacuate_followers);
+   const ReferenceProcessorStats& stats = rp->process_discovered_references(task, pt);
+-  gc_tracer.report_gc_reference_stats(stats);
+-  gc_tracer.report_tenuring_threshold(tenuring_threshold());
++  _gc_tracer->report_gc_reference_stats(stats);
++  _gc_tracer->report_tenuring_threshold(tenuring_threshold());
+   pt.print_all_references();
+ 
+   assert(heap->no_allocs_since_save_marks(), "save marks have not been newly set.");
+@@ -647,7 +648,7 @@ void DefNewGeneration::collect(bool   full,
+ 
+     // Inform the next generation that a promotion failure occurred.
+     _old_gen->promotion_failure_occurred();
+-    gc_tracer.report_promotion_failed(_promotion_failed_info);
++    _gc_tracer->report_promotion_failed(_promotion_failed_info);
+ 
+     // Reset the PromotionFailureALot counters.
+     NOT_PRODUCT(heap->reset_promotion_should_fail();)
+@@ -655,11 +656,11 @@ void DefNewGeneration::collect(bool   full,
+   // We should have processed and cleared all the preserved marks.
+   _preserved_marks_set.reclaim();
+ 
+-  heap->trace_heap_after_gc(&gc_tracer);
++  heap->trace_heap_after_gc(_gc_tracer);
+ 
+   _gc_timer->register_gc_end();
+ 
+-  gc_tracer.report_gc_end(_gc_timer->gc_end(), _gc_timer->time_partitions());
++  _gc_tracer->report_gc_end(_gc_timer->gc_end(), _gc_timer->time_partitions());
+ }
+ 
+ void DefNewGeneration::init_assuming_no_promotion_failure() {
+diff --git a/src/hotspot/share/gc/serial/defNewGeneration.hpp b/src/hotspot/share/gc/serial/defNewGeneration.hpp
+index ac8d834782a..4d62a0dd9ed 100644
+--- a/src/hotspot/share/gc/serial/defNewGeneration.hpp
++++ b/src/hotspot/share/gc/serial/defNewGeneration.hpp
+@@ -39,6 +39,7 @@ class ContiguousSpace;
+ class CSpaceCounters;
+ class DefNewYoungerGenClosure;
+ class DefNewScanClosure;
++class DefNewTracer;
+ class ScanWeakRefClosure;
+ class SerialHeap;
+ class STWGCTimer;
+@@ -139,6 +140,8 @@ class DefNewGeneration: public Generation {
+ 
+   STWGCTimer* _gc_timer;
+ 
++  DefNewTracer* _gc_tracer;
++
+   enum SomeProtectedConstants {
+     // Generations are GenGrain-aligned and have size that are multiples of
+     // GenGrain.
+@@ -330,6 +333,8 @@ class DefNewGeneration: public Generation {
+     return _promo_failure_scan_stack.is_empty();
+   }
+ 
++  DefNewTracer* gc_tracer() const { return _gc_tracer; }
++
+  protected:
+   // If clear_space is true, clear the survivor spaces.  Eden is
+   // cleared if the minimum size of eden is 0.  If mangle_space
+diff --git a/src/hotspot/share/gc/shared/gcTrace.cpp b/src/hotspot/share/gc/shared/gcTrace.cpp
+index 126cb464b8e..e609864963f 100644
+--- a/src/hotspot/share/gc/shared/gcTrace.cpp
++++ b/src/hotspot/share/gc/shared/gcTrace.cpp
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -37,6 +37,10 @@
+ #include "utilities/macros.hpp"
+ #include "utilities/ticks.hpp"
+ 
++bool GCTracer::should_report_cpu_time_event() const {
++  return should_send_cpu_time_event();
++}
++
+ void GCTracer::report_gc_start_impl(GCCause::Cause cause, const Ticks& timestamp) {
+   _shared_gc_info.set_cause(cause);
+   _shared_gc_info.set_start_timestamp(timestamp);
+@@ -59,6 +63,10 @@ void GCTracer::report_gc_end(const Ticks& timestamp, TimePartitions* time_partit
+   report_gc_end_impl(timestamp, time_partitions);
+ }
+ 
++void GCTracer::report_cpu_time_event(double user_time, double system_time, double real_time) const {
++  send_cpu_time_event(user_time, system_time, real_time);
++}
++
+ void GCTracer::report_gc_reference_stats(const ReferenceProcessorStats& rps) const {
+   send_reference_stats_event(REF_SOFT, rps.soft_count());
+   send_reference_stats_event(REF_WEAK, rps.weak_count());
+diff --git a/src/hotspot/share/gc/shared/gcTrace.hpp b/src/hotspot/share/gc/shared/gcTrace.hpp
+index 6a00b7c71be..483149b3868 100644
+--- a/src/hotspot/share/gc/shared/gcTrace.hpp
++++ b/src/hotspot/share/gc/shared/gcTrace.hpp
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -97,12 +97,14 @@ class GCTracer : public ResourceObj {
+   SharedGCInfo _shared_gc_info;
+ 
+  public:
++  bool should_report_cpu_time_event() const;
+   void report_gc_start(GCCause::Cause cause, const Ticks& timestamp);
+   void report_gc_end(const Ticks& timestamp, TimePartitions* time_partitions);
+   void report_gc_heap_summary(GCWhen::Type when, const GCHeapSummary& heap_summary) const;
+   void report_metaspace_summary(GCWhen::Type when, const MetaspaceSummary& metaspace_summary) const;
+   void report_gc_reference_stats(const ReferenceProcessorStats& rp) const;
+   void report_object_count_after_gc(BoolObjectClosure* object_filter, WorkGang* workers) NOT_SERVICES_RETURN;
++  void report_cpu_time_event(double user_time, double system_time, double real_time) const;
+ 
+  protected:
+   GCTracer(GCName name) : _shared_gc_info(name) {}
+@@ -110,12 +112,14 @@ class GCTracer : public ResourceObj {
+   virtual void report_gc_end_impl(const Ticks& timestamp, TimePartitions* time_partitions);
+ 
+  private:
++  bool should_send_cpu_time_event() const;
+   void send_garbage_collection_event() const;
+   void send_gc_heap_summary_event(GCWhen::Type when, const GCHeapSummary& heap_summary) const;
+   void send_meta_space_summary_event(GCWhen::Type when, const MetaspaceSummary& meta_space_summary) const;
+   void send_metaspace_chunk_free_list_summary(GCWhen::Type when, Metaspace::MetadataType mdtype, const MetaspaceChunkFreeListSummary& summary) const;
+   void send_reference_stats_event(ReferenceType type, size_t count) const;
+   void send_phase_events(TimePartitions* time_partitions) const;
++  void send_cpu_time_event(double user_time, double system_time, double real_time) const;
+ };
+ 
+ class YoungGCTracer : public GCTracer {
+diff --git a/src/hotspot/share/gc/shared/gcTraceSend.cpp b/src/hotspot/share/gc/shared/gcTraceSend.cpp
+index d57af7ceaf1..5ee37592f28 100644
+--- a/src/hotspot/share/gc/shared/gcTraceSend.cpp
++++ b/src/hotspot/share/gc/shared/gcTraceSend.cpp
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -36,6 +36,10 @@
+ 
+ typedef uintptr_t TraceAddress;
+ 
++bool GCTracer::should_send_cpu_time_event() const {
++  return EventGCCPUTime::is_enabled();
++}
++
+ void GCTracer::send_garbage_collection_event() const {
+   EventGarbageCollection event(UNTIMED);
+   if (event.should_commit()) {
+@@ -50,6 +54,17 @@ void GCTracer::send_garbage_collection_event() const {
+   }
+ }
+ 
++void GCTracer::send_cpu_time_event(double user_time, double system_time, double real_time) const {
++  EventGCCPUTime e;
++  if (e.should_commit()) {
++      e.set_gcId(GCId::current());
++      e.set_userTime((size_t)(user_time * NANOUNITS));
++      e.set_systemTime((size_t)(system_time * NANOUNITS));
++      e.set_realTime((size_t)(real_time * NANOUNITS));
++      e.commit();
++  }
++}
++
+ void GCTracer::send_reference_stats_event(ReferenceType type, size_t count) const {
+   EventGCReferenceStatistics e;
+   if (e.should_commit()) {
+diff --git a/src/hotspot/share/gc/shared/gcTraceTime.cpp b/src/hotspot/share/gc/shared/gcTraceTime.cpp
+index 3cb5b0f7164..2477b801c07 100644
+--- a/src/hotspot/share/gc/shared/gcTraceTime.cpp
++++ b/src/hotspot/share/gc/shared/gcTraceTime.cpp
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2012, 2015, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -25,6 +25,7 @@
+ #include "precompiled.hpp"
+ #include "gc/shared/collectedHeap.hpp"
+ #include "gc/shared/gcTraceTime.inline.hpp"
++#include "gc/shared/gcTrace.hpp"
+ #include "logging/log.hpp"
+ #include "logging/logStream.hpp"
+ #include "memory/universe.hpp"
+@@ -70,16 +71,18 @@ void GCTraceTimeLoggerImpl::log_end(Ticks end) {
+   out.print_cr(" %.3fms", duration_in_ms);
+ }
+ 
+-GCTraceCPUTime::GCTraceCPUTime() :
+-  _active(log_is_enabled(Info, gc, cpu)),
++GCTraceCPUTime::GCTraceCPUTime(GCTracer* tracer) :
++  _active(log_is_enabled(Info, gc, cpu) ||
++          (tracer != nullptr && tracer->should_report_cpu_time_event())),
+   _starting_user_time(0.0),
+   _starting_system_time(0.0),
+-  _starting_real_time(0.0)
++  _starting_real_time(0.0),
++  _tracer(tracer)
+ {
+   if (_active) {
+     bool valid = os::getTimesSecs(&_starting_real_time,
+-                               &_starting_user_time,
+-                               &_starting_system_time);
++                                  &_starting_user_time,
++                                  &_starting_system_time);
+     if (!valid) {
+       log_warning(gc, cpu)("TraceCPUTime: os::getTimesSecs() returned invalid result");
+       _active = false;
+@@ -92,10 +95,13 @@ GCTraceCPUTime::~GCTraceCPUTime() {
+     double real_time, user_time, system_time;
+     bool valid = os::getTimesSecs(&real_time, &user_time, &system_time);
+     if (valid) {
+-      log_info(gc, cpu)("User=%3.2fs Sys=%3.2fs Real=%3.2fs",
+-                        user_time - _starting_user_time,
+-                        system_time - _starting_system_time,
+-                        real_time - _starting_real_time);
++      user_time -= _starting_user_time;
++      system_time -= _starting_system_time;
++      real_time -= _starting_real_time;
++      log_info(gc, cpu)("User=%3.2fs Sys=%3.2fs Real=%3.2fs", user_time, system_time, real_time);
++      if (_tracer != nullptr) {
++        _tracer->report_cpu_time_event(user_time, system_time, real_time);
++      }
+     } else {
+       log_warning(gc, cpu)("TraceCPUTime: os::getTimesSecs() returned invalid result");
+     }
+diff --git a/src/hotspot/share/gc/shared/gcTraceTime.hpp b/src/hotspot/share/gc/shared/gcTraceTime.hpp
+index fbd46b5393d..955f267ddef 100644
+--- a/src/hotspot/share/gc/shared/gcTraceTime.hpp
++++ b/src/hotspot/share/gc/shared/gcTraceTime.hpp
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2012, 2019, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -32,13 +32,16 @@
+ #include "memory/allocation.hpp"
+ #include "utilities/ticks.hpp"
+ 
++class GCTracer;
++
+ class GCTraceCPUTime : public StackObj {
+   bool _active;                 // true if times will be measured and printed
+   double _starting_user_time;   // user time at start of measurement
+   double _starting_system_time; // system time at start of measurement
+   double _starting_real_time;   // real time at start of measurement
+- public:
+-  GCTraceCPUTime();
++  GCTracer* _tracer;
++public:
++  GCTraceCPUTime(GCTracer* tracer);
+   ~GCTraceCPUTime();
+ };
+ 
+diff --git a/src/hotspot/share/gc/shared/genCollectedHeap.cpp b/src/hotspot/share/gc/shared/genCollectedHeap.cpp
+index 411c1dc06ba..12a8355547f 100644
+--- a/src/hotspot/share/gc/shared/genCollectedHeap.cpp
++++ b/src/hotspot/share/gc/shared/genCollectedHeap.cpp
+@@ -31,6 +31,7 @@
+ #include "code/icBuffer.hpp"
+ #include "compiler/oopMap.hpp"
+ #include "gc/serial/defNewGeneration.hpp"
++#include "gc/serial/genMarkSweep.hpp"
+ #include "gc/shared/adaptiveSizePolicy.hpp"
+ #include "gc/shared/cardTableBarrierSet.hpp"
+ #include "gc/shared/cardTableRS.hpp"
+@@ -554,7 +555,7 @@ void GenCollectedHeap::do_collection(bool           full,
+ 
+   if (do_young_collection) {
+     GCIdMark gc_id_mark;
+-    GCTraceCPUTime tcpu;
++    GCTraceCPUTime tcpu(((DefNewGeneration*)_young_gen)->gc_tracer());
+     GCTraceTime(Info, gc) t("Pause Young", NULL, gc_cause(), true);
+ 
+     print_heap_before_gc();
+@@ -605,7 +606,7 @@ void GenCollectedHeap::do_collection(bool           full,
+ 
+   if (do_full_collection) {
+     GCIdMark gc_id_mark;
+-    GCTraceCPUTime tcpu;
++    GCTraceCPUTime tcpu(GenMarkSweep::gc_tracer());
+     GCTraceTime(Info, gc) t("Pause Full", NULL, gc_cause(), true);
+ 
+     print_heap_before_gc();
+diff --git a/src/hotspot/share/jfr/metadata/metadata.xml b/src/hotspot/share/jfr/metadata/metadata.xml
+index f75df93e673..6bf3cab587f 100644
+--- a/src/hotspot/share/jfr/metadata/metadata.xml
++++ b/src/hotspot/share/jfr/metadata/metadata.xml
+@@ -431,6 +431,14 @@
+     <Field type="uint" name="gcId" label="GC Identifier" relation="GcId" />
+   </Event>
+ 
++  <Event name="GCCPUTime" category="Java Virtual Machine, GC, Detailed" label="GC CPU Time" description="GC CPU Time information. Supported: G1GC, ParallelGC and SerialGC"
++    stackTrace="false" startTime="false">
++    <Field type="uint" name="gcId" label="GC Identifier" relation="GcId" />
++    <Field type="ulong" contentType="nanos" name="userTime" label="User Time" />
++    <Field type="ulong" contentType="nanos" name="systemTime" label="System Time" />
++    <Field type="ulong" contentType="nanos" name="realTime" label="Real Time" />
++  </Event>
++
+   <Event name="GCPhasePause" category="Java Virtual Machine, GC, Phases" label="GC Phase Pause" thread="true">
+     <Field type="uint" name="gcId" label="GC Identifier" relation="GcId" />
+     <Field type="string" name="name" label="Name" />
+diff --git a/src/jdk.jfr/share/conf/jfr/default.jfc b/src/jdk.jfr/share/conf/jfr/default.jfc
+index 9c265eba45a..aeab7991701 100644
+--- a/src/jdk.jfr/share/conf/jfr/default.jfc
++++ b/src/jdk.jfr/share/conf/jfr/default.jfc
+@@ -411,6 +411,10 @@
+       <setting name="enabled" control="gc-enabled-normal">true</setting>
+     </event>
+ 
++    <event name="jdk.GCCPUTime">
++      <setting name="enabled" control="gc-enabled-normal">true</setting>
++    </event>
++
+     <event name="jdk.PromotionFailed">
+       <setting name="enabled" control="gc-enabled-normal">true</setting>
+     </event>
+@@ -864,10 +868,10 @@
+ 
+ 
+ 
+-  <!--                                                                                                        
+-  Contents of the control element is not read by the JVM, it's used                                           
+-  by JDK Mission Control and the 'jfr' tool to change settings that                                           
+-  carry the control attribute.                                                                                
++  <!--
++  Contents of the control element is not read by the JVM, it's used
++  by JDK Mission Control and the 'jfr' tool to change settings that
++  carry the control attribute.
+   -->
+     <control>
+      <selection name="gc" default="normal" label="Garbage Collector">
+diff --git a/src/jdk.jfr/share/conf/jfr/profile.jfc b/src/jdk.jfr/share/conf/jfr/profile.jfc
+index dd2708d52a9..b4943a3f435 100644
+--- a/src/jdk.jfr/share/conf/jfr/profile.jfc
++++ b/src/jdk.jfr/share/conf/jfr/profile.jfc
+@@ -349,7 +349,7 @@
+     <event name="jdk.SystemGC">
+       <setting name="enabled">true</setting>
+       <setting name="threshold">0 ms</setting>
+-      <setting name="stackTrace">true</setting> 
++      <setting name="stackTrace">true</setting>
+     </event>
+ 
+     <event name="jdk.ParallelOldGarbageCollection">
+@@ -411,6 +411,10 @@
+       <setting name="enabled" control="gc-enabled-normal">true</setting>
+     </event>
+ 
++    <event name="jdk.GCCPUTime">
++      <setting name="enabled" control="gc-enabled-normal">true</setting>
++    </event>
++
+     <event name="jdk.PromotionFailed">
+       <setting name="enabled" control="gc-enabled-normal">true</setting>
+     </event>
+@@ -864,10 +868,10 @@
+ 
+ 
+ 
+-  <!--                                                                                                        
+-  Contents of the control element is not read by the JVM, it's used                                           
+-  by JDK Mission Control and the 'jfr' tool to change settings that                                           
+-  carry the control attribute.                                                                                
++  <!--
++  Contents of the control element is not read by the JVM, it's used
++  by JDK Mission Control and the 'jfr' tool to change settings that
++  carry the control attribute.
+   -->
+     <control>
+         <selection name="gc" default="detailed" label="Garbage Collector">
+diff --git a/test/jdk/jdk/jfr/event/gc/collection/GCEventAll.java b/test/jdk/jdk/jfr/event/gc/collection/GCEventAll.java
+index 6668078a2f6..023acfb144b 100644
+--- a/test/jdk/jdk/jfr/event/gc/collection/GCEventAll.java
++++ b/test/jdk/jdk/jfr/event/gc/collection/GCEventAll.java
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
++ * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
+  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+  *
+  * This code is free software; you can redistribute it and/or modify it
+@@ -267,13 +267,17 @@ private void verifySingleGcBatch(List<GCHelper.GcBatch> batches) {
+                 Instant batchStartTime = endEvent.getStartTime();
+                 Instant batchEndTime = endEvent.getEndTime();
+                 for (RecordedEvent event : batch.getEvents()) {
+-                    if (event.getEventType().getName().contains("AllocationRequiringGC")) {
++                    String name = event.getEventType().getName();
++                    if (name.contains("AllocationRequiringGC")) {
+                         // Unlike other events, these are sent *before* a GC.
+                         Asserts.assertLessThanOrEqual(event.getStartTime(), batchStartTime, "Timestamp in event after start event, should be sent before GC start");
+                     } else {
+                         Asserts.assertGreaterThanOrEqual(event.getStartTime(), batchStartTime, "startTime in event before batch start event, should be sent after GC start");
+                     }
+-                    Asserts.assertLessThanOrEqual(event.getEndTime(), batchEndTime, "endTime in event after batch end event, should be sent before GC end");
++                    // GCCPUTime is generated after GC is completed.
++                    if (!EventNames.GCCPUTime.equals(name)) {
++                        Asserts.assertLessThanOrEqual(event.getEndTime(), batchEndTime, "endTime in event after batch end event, should be sent before GC end");
++                    }
+                 }
+ 
+                 // Verify that all required events has been received.
+diff --git a/test/jdk/jdk/jfr/event/gc/detailed/TestGCCPUTimeEvent.java b/test/jdk/jdk/jfr/event/gc/detailed/TestGCCPUTimeEvent.java
+new file mode 100644
+index 00000000000..9e7d7ca5413
+--- /dev/null
++++ b/test/jdk/jdk/jfr/event/gc/detailed/TestGCCPUTimeEvent.java
+@@ -0,0 +1,88 @@
++/*
++ * Copyright (c) 2022, Oracle and/or its affiliates. All rights reserved.
++ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
++ *
++ * This code is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License version 2 only, as
++ * published by the Free Software Foundation.
++ *
++ * This code is distributed in the hope that it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++ * version 2 for more details (a copy is included in the LICENSE file that
++ * accompanied this code).
++ *
++ * You should have received a copy of the GNU General Public License version
++ * 2 along with this work; if not, write to the Free Software Foundation,
++ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
++ *
++ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
++ * or visit www.oracle.com if you need additional information or have any
++ * questions.
++ */
++package jdk.jfr.event.gc.detailed;
++
++import java.util.List;
++
++import jdk.jfr.Recording;
++import jdk.jfr.consumer.RecordedEvent;
++import jdk.test.lib.jfr.EventNames;
++import jdk.test.lib.jfr.Events;
++import jdk.test.whitebox.WhiteBox;
++
++/**
++ * @test id=Serial
++ * @key jfr
++ * @requires vm.hasJFR
++ * @requires vm.gc.Serial
++ * @library /test/lib /test/jdk
++ * @build jdk.test.whitebox.WhiteBox
++ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
++ * @run main/othervm -Xbootclasspath/a:. -Xmx32m -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:+UseSerialGC jdk.jfr.event.gc.detailed.TestGCCPUTimeEvent
++ */
++
++/**
++ * @test id=Parallel
++ * @key jfr
++ * @requires vm.hasJFR
++ * @requires vm.gc.Parallel
++ * @library /test/lib /test/jdk
++ * @build jdk.test.whitebox.WhiteBox
++ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
++ * @run main/othervm -Xbootclasspath/a:. -Xmx32m -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:+UseParallelGC jdk.jfr.event.gc.detailed.TestGCCPUTimeEvent
++ */
++
++/**
++ * @test id=G1
++ * @key jfr
++ * @requires vm.hasJFR
++ * @requires vm.gc.G1
++ * @library /test/lib /test/jdk
++ * @build jdk.test.whitebox.WhiteBox
++ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
++ * @run main/othervm -Xbootclasspath/a:. -Xmx32m -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:+UseG1GC jdk.jfr.event.gc.detailed.TestGCCPUTimeEvent
++ */
++
++public class TestGCCPUTimeEvent {
++    private static final String EVENT_NAME = EventNames.GCCPUTime;
++
++    public static void main(String[] args) throws Exception {
++
++        try (Recording recording = new Recording()) {
++
++            // Activate the event we are interested in and start recording
++            recording.enable(EVENT_NAME);
++            recording.start();
++
++            // Guarantee one young GC.
++            WhiteBox.getWhiteBox().youngGC();
++            recording.stop();
++
++            // Verify recording
++            List<RecordedEvent> events = Events.fromRecording(recording);
++            Events.hasEvent(events, EVENT_NAME);
++
++            recording.close();
++        }
++    }
++}
+diff --git a/test/lib/jdk/test/lib/jfr/EventNames.java b/test/lib/jdk/test/lib/jfr/EventNames.java
+index 2a81812e394..1d9c76cba97 100644
+--- a/test/lib/jdk/test/lib/jfr/EventNames.java
++++ b/test/lib/jdk/test/lib/jfr/EventNames.java
+@@ -151,6 +151,7 @@ public class EventNames {
+     public static final String ZUnmap = PREFIX + "ZUnmap";
+     public static final String GCLocker = PREFIX + "GCLocker";
+     public static final String SystemGC = PREFIX + "SystemGC";
++    public static final String GCCPUTime = PREFIX + "GCCPUTime";
+ 
+     // Compiler
+     public static final String Compilation = PREFIX + "Compilation";

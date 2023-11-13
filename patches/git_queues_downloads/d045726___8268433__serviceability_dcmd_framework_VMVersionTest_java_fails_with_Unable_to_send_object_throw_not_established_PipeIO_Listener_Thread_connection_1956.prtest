@@ -1,0 +1,29 @@
+diff --git a/test/hotspot/jtreg/ProblemList-zgc.txt b/test/hotspot/jtreg/ProblemList-zgc.txt
+index d81f604ca9b..0a96a797d41 100644
+--- a/test/hotspot/jtreg/ProblemList-zgc.txt
++++ b/test/hotspot/jtreg/ProblemList-zgc.txt
+@@ -44,7 +44,3 @@ serviceability/sa/TestJmapCoreMetaspace.java                  8268722,8268636
+ serviceability/sa/TestJhsdbJstackMixed.java                   8248912   generic-all
+ serviceability/sa/ClhsdbPstack.java#id0                       8248912   generic-all
+ serviceability/sa/ClhsdbPstack.java#id1                       8248912   generic-all
+-
+-serviceability/dcmd/framework/HelpTest.java                   8268433 windows-x64
+-serviceability/dcmd/framework/InvalidCommandTest.java         8268433 windows-x64
+-serviceability/dcmd/framework/VMVersionTest.java              8268433 windows-x64
+diff --git a/test/hotspot/jtreg/serviceability/dcmd/framework/TestProcessLauncher.java b/test/hotspot/jtreg/serviceability/dcmd/framework/TestProcessLauncher.java
+index 8953c8586dc..ec41c8b10de 100644
+--- a/test/hotspot/jtreg/serviceability/dcmd/framework/TestProcessLauncher.java
++++ b/test/hotspot/jtreg/serviceability/dcmd/framework/TestProcessLauncher.java
+@@ -77,7 +77,11 @@ public Process launch() {
+ 
+     public void quit() {
+         if (pipe != null) {
+-            pipe.println("quit");
++            if (pipe.isConnected()) {
++                pipe.println("quit");
++            } else {
++                System.out.println("WARNING: IOPipe is not connected");
++            }
+         }
+     }
+ 
