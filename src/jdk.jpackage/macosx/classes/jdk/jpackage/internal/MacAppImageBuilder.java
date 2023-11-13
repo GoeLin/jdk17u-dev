@@ -690,7 +690,7 @@ public class MacAppImageBuilder extends AbstractAppImageBuilder {
         return args;
     }
 
-    private static void signAppBundle(
+    static void signAppBundle(
             Map<String, ? super Object> params, Path appLocation,
             String signingIdentity, String identifierPrefix, Path entitlements)
             throws IOException {

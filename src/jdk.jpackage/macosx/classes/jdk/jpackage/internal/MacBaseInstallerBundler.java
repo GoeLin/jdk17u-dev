@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -154,17 +154,51 @@ public abstract class MacBaseInstallerBundler extends AbstractBundler {
             appImageBundler.validate(params);
         }
     }
-
+    /*
     protected Path prepareAppBundle(Map<String, ? super Object> params)
             throws PackagerException {
         Path predefinedImage =
                 StandardBundlerParam.getPredefinedAppImage(params);
         if (predefinedImage != null) {
             return predefinedImage;
+            /*
+            GLGL TBD
+                // We need to re-sign app image after adding ".package" to it.
+                // We only do this if app image was not signed which means it is
+                // signed with ad-hoc signature. App bundles with ad-hoc
+                // signature are sealed, but without a signing identity, so we
+                // need to re-sign it after modification.
+                MacAppImageBuilder.signAppBundle(params, appDir, "-", null, null);
+            *
         }
         Path appImageRoot = APP_IMAGE_TEMP_ROOT.fetchFrom(params);
 
         return appImageBundler.execute(params, appImageRoot);
+    }
+    */
+    protected Path prepareAppBundle(Map<String, ? super Object> params)
+            throws PackagerException {
+        Path appDir;
+        Path appImageRoot = APP_IMAGE_TEMP_ROOT.fetchFrom(params);
+        Path predefinedImage =
+                StandardBundlerParam.getPredefinedAppImage(params);
+        if (predefinedImage != null) {
+            appDir = predefinedImage;
+            // Create PackageFile if predefined app image is not signed
+            if (!StandardBundlerParam.isRuntimeInstaller(params) &&
+                    !AppImageFile.load(predefinedImage).isSigned()) {
+                // We need to re-sign app image after adding ".package" to it.
+                // We only do this if app image was not signed which means it is
+                // signed with ad-hoc signature. App bundles with ad-hoc
+                // signature are sealed, but without a signing identity, so we
+                // need to re-sign it after modification.
+                MacAppImageBuilder.signAppBundle(params, appDir, "-", null, null);
+            }
+        } else {
+            appDir = appImageBundler.execute(params, appImageRoot);
+        }
+
+        return appDir;
     }
 
     @Override
