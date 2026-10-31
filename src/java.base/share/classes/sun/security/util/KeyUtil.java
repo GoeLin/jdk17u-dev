@@ -450,5 +450,25 @@ public final class KeyUtil {
         return alg.equalsIgnoreCase("TlsPremasterSecret")
                 || alg.equalsIgnoreCase("Generic");
     }
+
+    // destroy secret keys in a best-effort way
+    public static void destroySecretKeys(SecretKey... keys) {
+        for (SecretKey k : keys) {
+            if (k != null) {
+                if (k instanceof SecretKeySpec sk) {
+                    SharedSecrets.getJavaxCryptoSpecAccess()
+                            .clearSecretKeySpec(sk);
+                } else if (k instanceof PBKDF2KeyImpl p2k) {
+                    p2k.clear();
+                } else {
+                    try {
+                        k.destroy();
+                    } catch (DestroyFailedException e) {
+                        // swallow
+                    }
+                }
+            }
+        }
+    }
 }
 
