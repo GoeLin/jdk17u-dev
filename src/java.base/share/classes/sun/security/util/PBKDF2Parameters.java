@@ -108,17 +108,19 @@ public final class PBKDF2Parameters {
         iterationCount = pBKDF2_params.data.getInteger();
 
         // keyLength INTEGER (1..MAX) OPTIONAL,
-        var ksDer = pBKDF2_params.data.getOptional(DerValue.tag_Integer);
-        if (ksDer.isPresent()) {
-            keyLength = ksDer.get().getInteger() * 8; // keyLength (in bits)
+        DerInputStream ksData = pBKDF2_params.data;
+        if (ksData.available() > 0 &&
+                ksData.data[ksData.pos] == DerValue.tag_Integer) {
+            keyLength = ksData.getInteger() * 8; // keyLength (in bits)
         } else {
             keyLength = -1;
         }
 
         // prf AlgorithmIdentifier {{PBKDF2-PRFs}} DEFAULT algid-hmacWithSHA1
-        var prfDer = pBKDF2_params.data.getOptional(DerValue.tag_Sequence);
-        if (prfDer.isPresent()) {
-            DerValue prf = prfDer.get();
+        DerInputStream prfData = pBKDF2_params.data;
+        if (prfData.available() > 0 &&
+                prfData.data[prfData.pos] == DerValue.tag_Sequence) {
+            DerValue prf = prfData.getDerValue();
             // the pseudorandom function (default is HmacSHA1)
             ObjectIdentifier kdfAlgo_OID = prf.data.getOID();
             KnownOIDs o = KnownOIDs.findMatch(kdfAlgo_OID.toString());
@@ -126,16 +128,19 @@ public final class PBKDF2Parameters {
                     !o.stdName().equals("HmacSHA224") &&
                     !o.stdName().equals("HmacSHA256") &&
                     !o.stdName().equals("HmacSHA384") &&
-                    !o.stdName().equals("HmacSHA512") &&
-                    !o.stdName().equals("HmacSHA512/224") &&
-                    !o.stdName().equals("HmacSHA512/256"))) {
+                    !o.stdName().equals("HmacSHA512"))) {
                 throw new IOException("PBKDF2 parameter parsing error: "
                         + "expecting the object identifier for a HmacSHA "
                         + "pseudorandom function");
             }
             prfAlgo = o.stdName();
-            prf.data.getOptional(DerValue.tag_Null);
-            prf.data.atEnd();
+            if (prf.data.available() > 0 &&
+                    prf.data.data[prf.data.pos] == DerValue.tag_Null) {
+                prf.data.getDerValue();
+            }
+            if (prf.data.available() != 0) {
+                throw new IOException("Extra unused bytes");
+            }
         } else {
             prfAlgo = "HmacSHA1";
         }
@@ -158,20 +163,25 @@ public final class PBKDF2Parameters {
 
         DerOutputStream out = new DerOutputStream();
         DerOutputStream tmp0 = new DerOutputStream();
+        DerOutputStream dos = new DerOutputStream();
 
-        tmp0.putOctetString(salt);
-        tmp0.putInteger(iterationCount);
-        tmp0.putInteger(keyLength);
+        try {
+            tmp0.putOctetString(salt);
+            tmp0.putInteger(iterationCount);
+            tmp0.putInteger(keyLength);
 
-        // prf AlgorithmIdentifier {{PBKDF2-PRFs}}
-        tmp0.write(new AlgorithmId(prf));
+            // prf AlgorithmIdentifier {{PBKDF2-PRFs}}
+            new AlgorithmId(prf).encode(tmp0);
 
-        // id-PBKDF2 OBJECT IDENTIFIER ::= {pkcs-5 12}
-        out.putOID(ObjectIdentifier.of(KnownOIDs.PBKDF2));
-        out.write(DerValue.tag_Sequence, tmp0);
+            // id-PBKDF2 OBJECT IDENTIFIER ::= {pkcs-5 12}
+            out.putOID(ObjectIdentifier.of(KnownOIDs.PBKDF2));
+            out.write(DerValue.tag_Sequence, tmp0);
 
-        return new DerOutputStream().write(DerValue.tag_Sequence, out)
-                .toByteArray();
+            dos.write(DerValue.tag_Sequence, out);
+        } catch (IOException e) {
+            // ignore
+        }
+        return dos.toByteArray();
     }
 
     /**
