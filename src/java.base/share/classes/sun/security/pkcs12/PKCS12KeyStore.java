@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -1264,7 +1264,8 @@ public final class PKCS12KeyStore extends KeyStoreSpi {
             macIterationCount = defaultMacIterationCount();
         }
         if (!macAlgorithm.equalsIgnoreCase("NONE")) {
-            byte[] macData = calculateMac(password, authenticatedSafe);
+            byte[] macData = MacData.generateMac(password, authenticatedSafe,
+                    macAlgorithm, macIterationCount, getSalt());
             pfx.write(macData);
         }
         // write PFX to output stream
@@ -1473,48 +1474,6 @@ public final class PKCS12KeyStore extends KeyStoreSpi {
             }
         }
     }
-
-    /*
-     * Calculate MAC using HMAC algorithm (required for password integrity)
-     *
-     * Hash-based MAC algorithm combines secret key with message digest to
-     * create a message authentication code (MAC)
-     */
-    private byte[] calculateMac(char[] passwd, byte[] data)
-        throws IOException
-    {
-        byte[] mData = null;
-        String algName = macAlgorithm.substring(7);
-
-        try {
-            // Generate a random salt.
-            byte[] salt = getSalt();
-
-            // generate MAC (MAC key is generated within JCE)
-            Mac m = Mac.getInstance(macAlgorithm);
-            PBEParameterSpec params =
-                        new PBEParameterSpec(salt, macIterationCount);
-            SecretKey key = getPBEKey(passwd);
-            try {
-                m.init(key, params);
-            } finally {
-                destroyPBEKey(key);
-            }
-            m.update(data);
-            byte[] macResult = m.doFinal();
-
-            // encode as MacData
-            MacData macData = new MacData(algName, macResult, salt,
-                    macIterationCount);
-            DerOutputStream bytes = new DerOutputStream();
-            bytes.write(macData.getEncoded());
-            mData = bytes.toByteArray();
-        } catch (Exception e) {
-            throw new IOException("calculateMac failed: " + e, e);
-        }
-        return mData;
-    }
-
 
     /*
      * Validate Certificate Chain

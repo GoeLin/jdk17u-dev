@@ -49,6 +49,11 @@ import javax.crypto.interfaces.DHKey;
 import javax.crypto.interfaces.DHPublicKey;
 import javax.crypto.spec.DHParameterSpec;
 import javax.crypto.spec.DHPublicKeySpec;
+import javax.crypto.spec.SecretKeySpec;
+import javax.security.auth.DestroyFailedException;
+import jdk.internal.access.SharedSecrets;
+
+import com.sun.crypto.provider.PBKDF2KeyImpl;
 import java.math.BigInteger;
 import java.security.spec.NamedParameterSpec;
 import java.util.Arrays;
